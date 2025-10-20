@@ -1,0 +1,70 @@
+{
+  "enabled": true,
+  "check_interval": 5,
+  "monitored_users": [
+    "son_username"
+  ],
+  "blocked_processes": [
+    "discord",
+    "telegram",
+    "example_game"
+  ],
+  "process_groups": {
+    "games": [
+      "minecraft",
+      "steam",
+      "roblox",
+      "fortnite",
+      "terraria"
+    ],
+    "browsers": [
+      "firefox",
+      "chrome",
+      "chromium",
+      "brave"
+    ],
+    "social": [
+      "discord",
+      "telegram",
+      "slack",
+      "whatsapp"
+    ],
+    "entertainment": [
+      "vlc",
+      "mpv",
+      "spotify",
+      "youtube"
+    ]
+  },
+  "group_limits": {
+    "games": 120,
+    "browsers": 180,
+    "entertainment": 90
+  },
+  "limited_processes": {
+    "minecraft": 60,
+    "youtube": 45
+  },
+  "monitored_processes": [
+    "firefox",
+    "chrome",
+    "chromium",
+    "steam",
+    "minecraft",
+    "discord",
+    "telegram",
+    "code",
+    "vlc"
+  ],
+  "warning_time": 300,
+  "warning_intervals_comment": "Warning times in seconds: 30min, 15min, 10min, 5min, 2min, 1min",
+  "warning_intervals": [1800, 900, 600, 300, 120, 60],
+  "usage_log_interval": 300,
+  "user_control": {
+    "enabled": false,
+    "check_interval": 60,
+    "auto_disable_on_violations": false,
+    "violation_threshold": 3,
+    "comment": "User control allows disabling accounts and setting access hours"
+  }
+}
