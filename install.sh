@@ -31,8 +31,19 @@ fi
 # Install required Python packages
 echo "Installing required Python packages..."
 pip3 install psutil || {
-    echo "Failed to install with pip3, trying with apt..."
-    apt-get update && apt-get install -y python3-psutil
+    echo "Failed to install with pip3, trying with system package manager..."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get update && apt-get install -y python3-psutil
+    elif command -v zypper >/dev/null 2>&1; then
+        zypper --non-interactive install python3-psutil
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y python3-psutil
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -S --noconfirm python3-psutil
+    else
+        echo "Error: Could not install psutil. Please install manually with: pip3 install psutil"
+        exit 1
+    fi
 }
 
 # Install notification support
@@ -40,6 +51,9 @@ echo "Installing notification support..."
 if command -v apt-get >/dev/null 2>&1; then
     # Debian/Ubuntu
     apt-get install -y libnotify-bin pulseaudio-utils dbus-x11 || true
+elif command -v zypper >/dev/null 2>&1; then
+    # openSUSE/SUSE
+    zypper --non-interactive install libnotify-tools pulseaudio-utils dbus-1-x11 || true
 elif command -v yum >/dev/null 2>&1; then
     # RHEL/CentOS/Fedora
     yum install -y libnotify pulseaudio-utils dbus-x11 || true
