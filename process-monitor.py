@@ -285,16 +285,17 @@ class ProcessMonitor:
             display = self.get_user_display(username)
             
             # Try to get user ID for DBUS
+            uid = None
             try:
                 uid = pwd.getpwnam(username).pw_uid
                 dbus_addr = f"unix:path=/run/user/{uid}/bus"
             except:
                 dbus_addr = ""
-            
+
             success = False
-            
+
             # Method 1: notify-send with proper DBUS
-            if dbus_addr and os.path.exists(f"/run/user/{uid}/bus"):
+            if dbus_addr and uid and os.path.exists(f"/run/user/{uid}/bus"):
                 cmd = (f'sudo -u {username} DISPLAY={display} '
                       f'DBUS_SESSION_BUS_ADDRESS={dbus_addr} '
                       f'notify-send -u {urgency} -t 10000 '
@@ -337,9 +338,6 @@ class ProcessMonitor:
             
         except subprocess.TimeoutExpired:
             self.logger.error("Group warning command timed out")
-        except Exception as e:
-            self.logger.error(f"Error in group warning system: {e}")
-            
         except Exception as e:
             self.logger.error(f"Error in group warning system: {e}")
     
@@ -419,16 +417,17 @@ class ProcessMonitor:
             display = self.get_user_display(username)
             
             # Try to get user ID for DBUS
+            uid = None
             try:
                 uid = pwd.getpwnam(username).pw_uid
                 dbus_addr = f"unix:path=/run/user/{uid}/bus"
             except:
                 dbus_addr = ""
-            
+
             success = False
-            
+
             # Method 1: notify-send with proper DBUS
-            if dbus_addr and os.path.exists(f"/run/user/{uid}/bus"):
+            if dbus_addr and uid and os.path.exists(f"/run/user/{uid}/bus"):
                 cmd = (f'sudo -u {username} DISPLAY={display} '
                       f'DBUS_SESSION_BUS_ADDRESS={dbus_addr} '
                       f'notify-send -u {urgency} -t 10000 '
@@ -488,9 +487,6 @@ class ProcessMonitor:
             self.logger.error("Warning command timed out")
         except Exception as e:
             self.logger.error(f"Error in warning system: {e}")
-            
-        except Exception as e:
-            self.logger.error(f"Error in warning system: {e}")
     
     def get_user_display(self, username: str) -> str:
         """Get the user's display variable"""
@@ -507,6 +503,79 @@ class ProcessMonitor:
         except:
             pass
         return ':0'  # Default fallback
+
+    def load_user_control_state(self) -> dict:
+        """Load user control state from file"""
+        try:
+            if self.user_control_file.exists():
+                with open(self.user_control_file, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            self.logger.warning(f"Could not load user control state: {e}")
+
+        return {
+            "disabled_users": {},
+            "scheduled_disables": {},
+            "daily_schedules": {}
+        }
+
+    def save_user_control_state(self):
+        """Save user control state to file"""
+        try:
+            self.user_control_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.user_control_file, 'w') as f:
+                json.dump(self.user_control_state, f, indent=2)
+        except Exception as e:
+            self.logger.error(f"Error saving user control state: {e}")
+
+    def get_group_usage(self, username: str, group_name: str) -> float:
+        """Get current group usage in seconds"""
+        return self.group_usage.get(username, {}).get(group_name, 0)
+
+    def handle_disabled_user(self, username: str):
+        """Handle a disabled user account - kill all their processes"""
+        try:
+            user_info = self.user_control_state.get("disabled_users", {}).get(username, {})
+            if not user_info:
+                return
+
+            # Kill all user processes
+            killed_count = 0
+            for proc in psutil.process_iter(['username', 'pid', 'name']):
+                try:
+                    if proc.username() == username:
+                        proc.terminate()
+                        killed_count += 1
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+
+            if killed_count > 0:
+                self.logger.info(f"Terminated {killed_count} processes for disabled user {username}")
+
+        except Exception as e:
+            self.logger.error(f"Error handling disabled user {username}: {e}")
+
+    def check_user_access_hours(self, username: str) -> bool:
+        """Check if user is within allowed access hours"""
+        try:
+            daily_schedules = self.user_control_state.get("daily_schedules", {})
+            if username not in daily_schedules:
+                return True  # No restrictions
+
+            schedule = daily_schedules[username]
+            current_hour = datetime.now().hour
+            start_hour = schedule.get("start_hour", 0)
+            end_hour = schedule.get("end_hour", 24)
+
+            # Check if current time is within allowed hours
+            if start_hour <= current_hour < end_hour:
+                return True
+            else:
+                return False
+
+        except Exception as e:
+            self.logger.error(f"Error checking access hours for {username}: {e}")
+            return True  # Default to allowing access on error
             
     def monitor_processes(self):
         """Main monitoring loop iteration"""

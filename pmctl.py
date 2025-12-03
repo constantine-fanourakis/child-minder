@@ -499,9 +499,7 @@ def main():
     
     group_unlimit_parser = subparsers.add_parser('group-unlimit', help='Remove time limit for a group')
     group_unlimit_parser.add_argument('group', help='Group name')
-    
-    subparsers.add_parser('groups', help='List all process groups')
-    
+
     subparsers.add_parser('groups', help='List all process groups')
     
     # User management
@@ -565,8 +563,6 @@ def main():
         manager.set_group_limit(args.group, args.minutes)
     elif args.command == 'group-unlimit':
         manager.remove_group_limit(args.group)
-    elif args.command == 'groups':
-        manager.list_groups()
     elif args.command == 'groups':
         manager.list_groups()
     elif args.command == 'add-user':
