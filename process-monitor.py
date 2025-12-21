@@ -12,9 +12,9 @@ import signal
 import logging
 import argparse
 import psutil
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Set, Optional
+from typing import Dict, Set, Optional
 import pwd
 import subprocess
 
@@ -62,6 +62,7 @@ class ProcessMonitor:
         # Setup signal handlers
         signal.signal(signal.SIGTERM, self.signal_handler)
         signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGHUP, self.reload_handler)
         
     def setup_logging(self):
         """Setup logging configuration"""
@@ -81,6 +82,11 @@ class ProcessMonitor:
         self.running = False
         self.save_state()
         sys.exit(0)
+
+    def reload_handler(self, signum, frame):
+        """Handle SIGHUP for config reload"""
+        self.logger.info("Received SIGHUP, reloading configuration...")
+        self.reload_config()
         
     def load_config(self) -> dict:
         """Load configuration from JSON file"""
@@ -289,7 +295,7 @@ class ProcessMonitor:
             try:
                 uid = pwd.getpwnam(username).pw_uid
                 dbus_addr = f"unix:path=/run/user/{uid}/bus"
-            except:
+            except KeyError:
                 dbus_addr = ""
 
             success = False
@@ -421,7 +427,7 @@ class ProcessMonitor:
             try:
                 uid = pwd.getpwnam(username).pw_uid
                 dbus_addr = f"unix:path=/run/user/{uid}/bus"
-            except:
+            except KeyError:
                 dbus_addr = ""
 
             success = False
@@ -458,9 +464,9 @@ class ProcessMonitor:
                                 with open(tty, 'w') as t:
                                     t.write(f"\n*** {title} ***\n{message}\n\n")
                                 success = True
-                            except:
+                            except (IOError, OSError, PermissionError):
                                 continue
-                except:
+                except Exception:
                     pass
             
             # Play sound for critical warnings
@@ -500,7 +506,7 @@ class ProcessMonitor:
                             return env['DISPLAY']
                 except (psutil.AccessDenied, psutil.NoSuchProcess, AttributeError):
                     continue
-        except:
+        except Exception:
             pass
         return ':0'  # Default fallback
 
@@ -519,27 +525,13 @@ class ProcessMonitor:
             "daily_schedules": {}
         }
 
-    def save_user_control_state(self):
-        """Save user control state to file"""
-        try:
-            self.user_control_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.user_control_file, 'w') as f:
-                json.dump(self.user_control_state, f, indent=2)
-        except Exception as e:
-            self.logger.error(f"Error saving user control state: {e}")
-
     def get_group_usage(self, username: str, group_name: str) -> float:
         """Get current group usage in seconds"""
         return self.group_usage.get(username, {}).get(group_name, 0)
 
-    def handle_disabled_user(self, username: str):
-        """Handle a disabled user account - kill all their processes"""
+    def kill_user_processes(self, username: str):
+        """Kill all processes for a user"""
         try:
-            user_info = self.user_control_state.get("disabled_users", {}).get(username, {})
-            if not user_info:
-                return
-
-            # Kill all user processes
             killed_count = 0
             for proc in psutil.process_iter(['username', 'pid', 'name']):
                 try:
@@ -550,7 +542,19 @@ class ProcessMonitor:
                     continue
 
             if killed_count > 0:
-                self.logger.info(f"Terminated {killed_count} processes for disabled user {username}")
+                self.logger.info(f"Terminated {killed_count} processes for user {username}")
+
+        except Exception as e:
+            self.logger.error(f"Error killing processes for user {username}: {e}")
+
+    def handle_disabled_user(self, username: str):
+        """Handle a disabled user account - kill all their processes"""
+        try:
+            user_info = self.user_control_state.get("disabled_users", {}).get(username, {})
+            if not user_info:
+                return
+
+            self.kill_user_processes(username)
 
         except Exception as e:
             self.logger.error(f"Error handling disabled user {username}: {e}")
@@ -591,8 +595,8 @@ class ProcessMonitor:
             # Check access hours for all monitored users
             for username in self.config.get("monitored_users", []):
                 if not self.check_user_access_hours(username):
-                    # User is outside allowed hours, treat as disabled
-                    self.handle_disabled_user(username)
+                    # User is outside allowed hours, kill their processes
+                    self.kill_user_processes(username)
         
         # Regular process monitoring
         for proc in psutil.process_iter(['pid', 'name', 'username', 'uids', 'create_time']):
@@ -621,35 +625,41 @@ class ProcessMonitor:
                 # Track whether to terminate due to limits
                 should_terminate = False
                 terminate_reason = ""
-                
+
+                # Track whether usage was already updated (to avoid double counting)
+                usage_updated = False
+                group_usage_updated = False
+
                 # Check group limits first (if applicable)
                 if group_name:
                     group_limit = self.get_group_limit(group_name)
                     if group_limit:
                         # Update group usage
                         self.update_group_usage(username, group_name, self.config['check_interval'])
+                        group_usage_updated = True
                         current_group_usage = self.get_group_usage(username, group_name)
-                        
+
                         if current_group_usage >= group_limit:
                             should_terminate = True
                             terminate_reason = f"Group '{group_name}' daily limit exceeded ({group_limit/60:.0f} minutes)"
                         else:
                             # Check if we should warn
                             remaining_seconds = group_limit - current_group_usage
-                            warning_level = self.should_warn(remaining_seconds, 
-                                                            group_name=group_name, 
+                            warning_level = self.should_warn(remaining_seconds,
+                                                            group_name=group_name,
                                                             username=username)
                             if warning_level:
                                 remaining_minutes = int(remaining_seconds / 60)
                                 self.warn_user_group(username, group_name, remaining_minutes)
-                
+
                 # Check individual time limits
                 individual_limit = self.get_process_limit(process_name)
                 if individual_limit:
                     # Update individual usage
                     self.update_usage(username, process_name, self.config['check_interval'])
+                    usage_updated = True
                     current_usage = self.get_usage(username, process_name)
-                    
+
                     if current_usage >= individual_limit:
                         should_terminate = True
                         terminate_reason = f"Individual daily time limit exceeded ({individual_limit/60:.0f} minutes)"
@@ -660,17 +670,18 @@ class ProcessMonitor:
                         if warning_level:
                             remaining_minutes = int(remaining_seconds / 60)
                             self.warn_user(proc, remaining_minutes)
-                
+
                 # Terminate if any limit exceeded
                 if should_terminate:
                     self.terminate_process(proc, terminate_reason)
                     continue
-                            
-                # Log monitored processes
+
+                # Log monitored processes (only update if not already updated by limits)
                 if self.is_process_monitored(process_name):
-                    self.update_usage(username, process_name, self.config['check_interval'])
-                    # Also update group usage for monitoring
-                    if group_name:
+                    if not usage_updated:
+                        self.update_usage(username, process_name, self.config['check_interval'])
+                    # Also update group usage for monitoring if not already updated
+                    if group_name and not group_usage_updated:
                         self.update_group_usage(username, group_name, self.config['check_interval'])
                     
             except (psutil.NoSuchProcess, psutil.AccessDenied):

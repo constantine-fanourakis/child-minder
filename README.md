@@ -405,7 +405,7 @@ sudo ./pmctl.py group-limit social 60
 - **Configuration**: `/etc/process-monitor/config.json`
 - **State/Usage Data**: `/var/lib/process-monitor/state.json`
 - **Logs**: `/var/log/process-monitor/monitor.log`
-- **Main Script**: `/usr/local/bin/process-monitor.py`
+- **Main Script**: `/usr/bin/process-monitor.py`
 - **Service File**: `/etc/systemd/system/process-monitor.service`
 
 ## Security Notes
@@ -450,8 +450,8 @@ sudo systemctl stop process-monitor
 sudo systemctl disable process-monitor
 
 # Remove files
-sudo rm /usr/local/bin/process-monitor.py
-sudo rm /usr/local/bin/pmctl.py
+sudo rm /usr/bin/process-monitor.py
+sudo rm /usr/bin/pmctl.py
 sudo rm /etc/systemd/system/process-monitor.service
 sudo rm -rf /etc/process-monitor
 sudo rm -rf /var/lib/process-monitor

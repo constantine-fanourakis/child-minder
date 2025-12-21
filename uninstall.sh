@@ -87,9 +87,9 @@ systemctl daemon-reload
 
 # Remove executable files
 echo "Removing executable files..."
-rm -f /usr/local/bin/process-monitor.py
-rm -f /usr/local/bin/pmctl.py
-rm -f /usr/local/bin/pmctl
+rm -f /usr/bin/process-monitor.py
+rm -f /usr/bin/pmctl.py
+rm -f /usr/bin/pmctl
 
 # Ask about removing data files
 echo ""

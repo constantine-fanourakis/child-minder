@@ -67,7 +67,6 @@ echo "Creating directories..."
 mkdir -p /etc/process-monitor
 mkdir -p /var/lib/process-monitor
 mkdir -p /var/log/process-monitor
-mkdir -p /usr/local/bin
 
 # Check if all required files exist
 REQUIRED_FILES=("process-monitor.py" "pmctl.py" "config.json" "process-monitor.service")
@@ -81,14 +80,14 @@ done
 
 # Copy files
 echo "Copying files..."
-cp process-monitor.py /usr/local/bin/
-chmod +x /usr/local/bin/process-monitor.py
+cp process-monitor.py /usr/bin/
+chmod +x /usr/bin/process-monitor.py
 
-cp pmctl.py /usr/local/bin/
-chmod +x /usr/local/bin/pmctl.py
+cp pmctl.py /usr/bin/
+chmod +x /usr/bin/pmctl.py
 
 # Create convenience symlink for pmctl
-ln -sf /usr/local/bin/pmctl.py /usr/local/bin/pmctl
+ln -sf /usr/bin/pmctl.py /usr/bin/pmctl
 
 # Check if config exists, don't overwrite if it does
 if [ ! -f /etc/process-monitor/config.json ]; then

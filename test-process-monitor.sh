@@ -64,14 +64,14 @@ else
 fi
 
 # Test 4: Check if main script exists
-if test_feature "main script" '[ -f /usr/local/bin/process-monitor.py ]'; then
+if test_feature "main script" '[ -f /usr/bin/process-monitor.py ]'; then
     ((PASSED++))
 else
     ((FAILED++))
 fi
 
 # Test 5: Check if management utility exists
-if test_feature "management utility" '[ -f /usr/local/bin/pmctl.py ]'; then
+if test_feature "management utility" '[ -f /usr/bin/pmctl.py ]'; then
     ((PASSED++))
 else
     ((FAILED++))
@@ -100,7 +100,7 @@ else
 fi
 
 # Test 9: Test pmctl command
-if test_feature "pmctl command" 'pmctl config > /dev/null'; then
+if test_feature "pmctl command" '/usr/bin/pmctl config > /dev/null'; then
     ((PASSED++))
 else
     ((FAILED++))

@@ -9,10 +9,9 @@ import sys
 import argparse
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, Optional
 import subprocess
 import pwd
-import os
 
 CONFIG_PATH = "/etc/process-monitor/config.json"
 STATE_PATH = "/var/lib/process-monitor/state.json"
@@ -297,8 +296,8 @@ class ProcessMonitorManager:
         status = "enabled" if enable else "disabled"
         print(f"Monitoring {status}")
     
-    def disable_user_account(self, username: str, reason: str = "Administrative action", 
-                            hours: int = None):
+    def disable_user_account(self, username: str, reason: str = "Administrative action",
+                            hours: Optional[int] = None):
         """Disable a user account"""
         try:
             # Lock the account

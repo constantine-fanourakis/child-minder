@@ -248,7 +248,7 @@ sudo passwd -S johnny  # Should show 'L'
 - **User Control**: `/var/lib/process-monitor/user_control.json`
 - **Logs**: `/var/log/process-monitor/monitor.log`
 - **Service**: `/etc/systemd/system/process-monitor.service`
-- **Scripts**: `/usr/local/bin/process-monitor.py`, `/usr/local/bin/pmctl.py`
+- **Scripts**: `/usr/bin/process-monitor.py`, `/usr/bin/pmctl.py`
 
 ## Safety Commands
 
@@ -259,8 +259,8 @@ sudo systemctl disable process-monitor
 sudo rm -rf /etc/process-monitor
 sudo rm -rf /var/lib/process-monitor
 sudo rm -rf /var/log/process-monitor
-sudo rm /usr/local/bin/process-monitor.py
-sudo rm /usr/local/bin/pmctl*
+sudo rm /usr/bin/process-monitor.py
+sudo rm /usr/bin/pmctl*
 sudo rm /etc/systemd/system/process-monitor.service
 sudo systemctl daemon-reload
 
