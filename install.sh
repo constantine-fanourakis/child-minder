@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# Process Monitor Installation Script
+# Child Minder Installation Script
 # Run with sudo: sudo bash install.sh
 
 set -e
 
-echo "Process Monitor Installation Script"
-echo "===================================="
+echo "Child Minder Installation Script"
+echo "================================="
 
 # Check if running as root
-if [ "$EUID" -ne 0 ]; then 
+if [ "$EUID" -ne 0 ]; then
    echo "Please run as root (use sudo)"
    exit 1
 fi
@@ -64,12 +64,12 @@ fi
 
 # Create directories
 echo "Creating directories..."
-mkdir -p /etc/process-monitor
-mkdir -p /var/lib/process-monitor
-mkdir -p /var/log/process-monitor
+mkdir -p /etc/child-minder
+mkdir -p /var/lib/child-minder
+mkdir -p /var/log/child-minder
 
 # Check if all required files exist
-REQUIRED_FILES=("process-monitor.py" "pmctl.py" "config.json" "process-monitor.service")
+REQUIRED_FILES=("child-minder.py" "cmctl.py" "config.json" "child-minder.service")
 for file in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$file" ]; then
         echo "Error: Required file '$file' not found in current directory"
@@ -80,20 +80,20 @@ done
 
 # Copy files
 echo "Copying files..."
-cp process-monitor.py /usr/bin/
-chmod +x /usr/bin/process-monitor.py
+cp child-minder.py /usr/bin/
+chmod +x /usr/bin/child-minder.py
 
-cp pmctl.py /usr/bin/
-chmod +x /usr/bin/pmctl.py
+cp cmctl.py /usr/bin/
+chmod +x /usr/bin/cmctl.py
 
-# Create convenience symlink for pmctl
-ln -sf /usr/bin/pmctl.py /usr/bin/pmctl
+# Create convenience symlink for cmctl
+ln -sf /usr/bin/cmctl.py /usr/bin/cmctl
 
 # Check if config exists, don't overwrite if it does
-if [ ! -f /etc/process-monitor/config.json ]; then
-    cp config.json /etc/process-monitor/
-    chmod 600 /etc/process-monitor/config.json
-    echo "Configuration file created at /etc/process-monitor/config.json"
+if [ ! -f /etc/child-minder/config.json ]; then
+    cp config.json /etc/child-minder/
+    chmod 600 /etc/child-minder/config.json
+    echo "Configuration file created at /etc/child-minder/config.json"
     echo "Please edit it to set your specific requirements:"
     echo "  - Update 'monitored_users' with the username(s) to monitor"
     echo "  - Adjust 'blocked_processes' list"
@@ -103,36 +103,36 @@ else
 fi
 
 # Set proper permissions
-chmod 755 /var/lib/process-monitor
-chmod 750 /var/log/process-monitor
+chmod 755 /var/lib/child-minder
+chmod 750 /var/log/child-minder
 
 # Install systemd service
 echo "Installing systemd service..."
-cp process-monitor.service /etc/systemd/system/
+cp child-minder.service /etc/systemd/system/
 
 # Reload systemd
 systemctl daemon-reload
 
 # Enable service (but don't start it yet)
 echo "Enabling service..."
-systemctl enable process-monitor.service
+systemctl enable child-minder.service
 
 echo ""
 echo "Installation complete!"
 echo ""
 echo "Next steps:"
-echo "1. Edit the configuration file: sudo nano /etc/process-monitor/config.json"
+echo "1. Edit the configuration file: sudo nano /etc/child-minder/config.json"
 echo "   - Add your child's username to 'monitored_users'"
 echo "   - Configure blocked processes and time limits"
-echo "2. Start the service: sudo systemctl start process-monitor"
-echo "3. Check service status: sudo systemctl status process-monitor"
-echo "4. View logs: sudo journalctl -u process-monitor -f"
+echo "2. Start the service: sudo systemctl start child-minder"
+echo "3. Check service status: sudo systemctl status child-minder"
+echo "4. View logs: sudo journalctl -u child-minder -f"
 echo ""
 echo "Useful commands:"
-echo "  - Stop service: sudo systemctl stop process-monitor"
-echo "  - Restart service: sudo systemctl restart process-monitor"
-echo "  - Management utility: sudo pmctl --help"
-echo "  - View detailed logs: sudo tail -f /var/log/process-monitor/monitor.log"
+echo "  - Stop service: sudo systemctl stop child-minder"
+echo "  - Restart service: sudo systemctl restart child-minder"
+echo "  - Management utility: sudo cmctl --help"
+echo "  - View detailed logs: sudo tail -f /var/log/child-minder/minder.log"
 echo ""
 echo "Testing recommendations:"
 echo "  - Test with a test user account first"

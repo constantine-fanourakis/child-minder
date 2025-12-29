@@ -1,4 +1,4 @@
-# Linux Process Monitor and Control System
+# Child Minder - Linux Process Monitor and Control System
 
 A comprehensive parental control system for Linux that monitors and controls application usage, with features for blocking applications, setting time limits, and logging usage statistics.
 
@@ -24,16 +24,16 @@ A comprehensive parental control system for Linux that monitors and controls app
 
 ## Installation
 
-1. **Download all files** to a directory (e.g., `/tmp/process-monitor/`):
-   - `process-monitor.py` - Main monitoring script
+1. **Download all files** to a directory (e.g., `/tmp/child-minder/`):
+   - `child-minder.py` - Main monitoring script
    - `config.json` - Configuration file
-   - `process-monitor.service` - Systemd service file
+   - `child-minder.service` - Systemd service file
    - `install.sh` - Installation script
-   - `pmctl.py` - Management utility
+   - `cmctl.py` - Management utility
 
 2. **Make scripts executable**:
    ```bash
-   chmod +x install.sh process-monitor.py pmctl.py
+   chmod +x install.sh child-minder.py cmctl.py
    ```
 
 3. **Run the installation script**:
@@ -43,7 +43,7 @@ A comprehensive parental control system for Linux that monitors and controls app
 
 4. **Configure the system**:
    ```bash
-   sudo nano /etc/process-monitor/config.json
+   sudo nano /etc/child-minder/config.json
    ```
    Update the configuration with:
    - Your son's username in `monitored_users`
@@ -53,12 +53,12 @@ A comprehensive parental control system for Linux that monitors and controls app
 
 5. **Start the service**:
    ```bash
-   sudo systemctl start process-monitor
+   sudo systemctl start child-minder
    ```
 
 ## Configuration
 
-The configuration file (`/etc/process-monitor/config.json`) contains:
+The configuration file (`/etc/child-minder/config.json`) contains:
 
 ### Basic Settings
 - `enabled`: Master on/off switch for monitoring
@@ -115,94 +115,94 @@ When both group and individual limits are set:
 }
 ```
 
-## Management Utility (pmctl.py)
+## Management Utility (cmctl.py)
 
 The management utility provides easy command-line control:
 
 ### View Information
 ```bash
-sudo ./pmctl.py config        # Show current configuration
-sudo ./pmctl.py usage         # Show today's usage statistics
-sudo ./pmctl.py status        # Show service status
-sudo ./pmctl.py logs -n 100   # Show last 100 log entries
-sudo ./pmctl.py groups        # List all process groups and limits
+sudo ./cmctl.py config        # Show current configuration
+sudo ./cmctl.py usage         # Show today's usage statistics
+sudo ./cmctl.py status        # Show service status
+sudo ./cmctl.py logs -n 100   # Show last 100 log entries
+sudo ./cmctl.py groups        # List all process groups and limits
 ```
 
 ### Manage Blocked Processes
 ```bash
-sudo ./pmctl.py block discord      # Block Discord
-sudo ./pmctl.py unblock discord    # Unblock Discord
+sudo ./cmctl.py block discord      # Block Discord
+sudo ./cmctl.py unblock discord    # Unblock Discord
 ```
 
 ### Manage Individual Time Limits
 ```bash
-sudo ./pmctl.py limit minecraft 60    # Limit Minecraft to 60 minutes/day
-sudo ./pmctl.py unlimit minecraft     # Remove time limit
+sudo ./cmctl.py limit minecraft 60    # Limit Minecraft to 60 minutes/day
+sudo ./cmctl.py unlimit minecraft     # Remove time limit
 ```
 
 ### Manage Process Groups
 ```bash
 # Create/modify groups
-sudo ./pmctl.py add-to-group games minecraft       # Add Minecraft to games group
-sudo ./pmctl.py add-to-group games roblox         # Add Roblox to games group
-sudo ./pmctl.py remove-from-group games minecraft  # Remove from group
+sudo ./cmctl.py add-to-group games minecraft       # Add Minecraft to games group
+sudo ./cmctl.py add-to-group games roblox         # Add Roblox to games group
+sudo ./cmctl.py remove-from-group games minecraft  # Remove from group
 
 # Set group limits
-sudo ./pmctl.py group-limit games 120      # All games combined: 2 hours/day
-sudo ./pmctl.py group-limit browsers 180   # All browsers combined: 3 hours/day
-sudo ./pmctl.py group-unlimit games        # Remove group limit
+sudo ./cmctl.py group-limit games 120      # All games combined: 2 hours/day
+sudo ./cmctl.py group-limit browsers 180   # All browsers combined: 3 hours/day
+sudo ./cmctl.py group-unlimit games        # Remove group limit
 ```
 
 ### Manage Users
 ```bash
-sudo ./pmctl.py add-user johnny       # Monitor user 'johnny'
-sudo ./pmctl.py remove-user johnny    # Stop monitoring user 'johnny'
+sudo ./cmctl.py add-user johnny       # Monitor user 'johnny'
+sudo ./cmctl.py remove-user johnny    # Stop monitoring user 'johnny'
 ```
 
 ### Control Service
 ```bash
-sudo ./pmctl.py enable     # Enable monitoring
-sudo ./pmctl.py disable    # Disable monitoring (temporarily)
-sudo ./pmctl.py reset      # Reset daily usage counters
+sudo ./cmctl.py enable     # Enable monitoring
+sudo ./cmctl.py disable    # Disable monitoring (temporarily)
+sudo ./cmctl.py reset      # Reset daily usage counters
 ```
 
 ### User Account Control
 ```bash
 # Disable user account (immediate logout)
-sudo ./pmctl.py disable-user johnny -r "Breaking rules"
-sudo ./pmctl.py disable-user johnny -t 2 -r "2 hour timeout"  # Auto re-enable after 2 hours
+sudo ./cmctl.py disable-user johnny -r "Breaking rules"
+sudo ./cmctl.py disable-user johnny -t 2 -r "2 hour timeout"  # Auto re-enable after 2 hours
 
 # Re-enable user account
-sudo ./pmctl.py enable-user johnny
+sudo ./cmctl.py enable-user johnny
 
 # Set allowed access hours (e.g., 8 AM to 9 PM)
-sudo ./pmctl.py set-user-hours johnny 8 21
+sudo ./cmctl.py set-user-hours johnny 8 21
 
 # Check user status
-sudo ./pmctl.py user-status johnny
-sudo ./pmctl.py user-status         # Show all disabled users
+sudo ./cmctl.py user-status johnny
+sudo ./cmctl.py user-status         # Show all disabled users
 ```
 
 ## Service Management
 
 ### Basic Commands
 ```bash
-sudo systemctl start process-monitor    # Start service
-sudo systemctl stop process-monitor     # Stop service
-sudo systemctl restart process-monitor  # Restart service
-sudo systemctl status process-monitor   # Check status
-sudo systemctl enable process-monitor   # Enable auto-start at boot
-sudo systemctl disable process-monitor  # Disable auto-start
+sudo systemctl start child-minder    # Start service
+sudo systemctl stop child-minder     # Stop service
+sudo systemctl restart child-minder  # Restart service
+sudo systemctl status child-minder   # Check status
+sudo systemctl enable child-minder   # Enable auto-start at boot
+sudo systemctl disable child-minder  # Disable auto-start
 ```
 
 ### View Logs
 ```bash
 # System logs
-sudo journalctl -u process-monitor -f   # Follow live logs
-sudo journalctl -u process-monitor --since today
+sudo journalctl -u child-minder -f   # Follow live logs
+sudo journalctl -u child-minder --since today
 
 # Application logs
-sudo tail -f /var/log/process-monitor/monitor.log
+sudo tail -f /var/log/child-minder/minder.log
 ```
 
 ## How It Works
@@ -226,13 +226,13 @@ The system includes comprehensive user account control features for stronger par
 Completely disable a user account when needed:
 ```bash
 # Disable immediately with reason
-sudo ./pmctl.py disable-user johnny -r "Homework not completed"
+sudo ./cmctl.py disable-user johnny -r "Homework not completed"
 
 # Disable for specific duration (auto re-enable)
-sudo ./pmctl.py disable-user johnny -t 3 -r "3 hour timeout"
+sudo ./cmctl.py disable-user johnny -t 3 -r "3 hour timeout"
 
 # Re-enable manually
-sudo ./pmctl.py enable-user johnny
+sudo ./cmctl.py enable-user johnny
 ```
 
 When an account is disabled:
@@ -246,13 +246,13 @@ When an account is disabled:
 Control when users can access the computer:
 ```bash
 # Set allowed hours (24-hour format)
-sudo ./pmctl.py set-user-hours johnny 8 21  # 8 AM to 9 PM
+sudo ./cmctl.py set-user-hours johnny 8 21  # 8 AM to 9 PM
 
 # School days: 3 PM to 9 PM
-sudo ./pmctl.py set-user-hours johnny 15 21
+sudo ./cmctl.py set-user-hours johnny 15 21
 
 # Weekends: 8 AM to 10 PM
-sudo ./pmctl.py set-user-hours johnny 8 22
+sudo ./cmctl.py set-user-hours johnny 8 22
 ```
 
 Outside allowed hours:
@@ -265,25 +265,25 @@ Outside allowed hours:
 #### Example 1: School Night Routine
 ```bash
 # Set school night hours (3 PM to 8 PM on weekdays)
-sudo ./pmctl.py set-user-hours johnny 15 20
+sudo ./cmctl.py set-user-hours johnny 15 20
 
 # If rules are broken, immediate timeout
-sudo ./pmctl.py disable-user johnny -t 1 -r "Broke screen time rules"
+sudo ./cmctl.py disable-user johnny -t 1 -r "Broke screen time rules"
 ```
 
 #### Example 2: Weekend Punishment
 ```bash
 # No computer for the weekend
-sudo ./pmctl.py disable-user johnny -t 48 -r "Grounded from computer"
+sudo ./cmctl.py disable-user johnny -t 48 -r "Grounded from computer"
 ```
 
 #### Example 3: Homework First Policy
 ```bash
 # Disable until homework is verified
-sudo ./pmctl.py disable-user johnny -r "Complete homework first"
+sudo ./cmctl.py disable-user johnny -r "Complete homework first"
 
 # Parent checks homework, then:
-sudo ./pmctl.py enable-user johnny
+sudo ./cmctl.py enable-user johnny
 ```
 
 #### Example 4: Graduated Consequences
@@ -297,7 +297,7 @@ sudo ./pmctl.py enable-user johnny
 Monitor account status:
 ```bash
 # Check specific user
-sudo ./pmctl.py user-status johnny
+sudo ./cmctl.py user-status johnny
 
 # Output:
 # === User Status: johnny ===
@@ -308,7 +308,7 @@ sudo ./pmctl.py user-status johnny
 # Access Hours: 8:00 - 21:00
 
 # Check all disabled users
-sudo ./pmctl.py user-status
+sudo ./cmctl.py user-status
 ```
 
 ### Configuration for User Control
@@ -358,16 +358,16 @@ Enable user control in config.json:
 Set up a 2-hour total limit for all games:
 ```bash
 # Define the games group
-sudo ./pmctl.py add-to-group games minecraft
-sudo ./pmctl.py add-to-group games steam
-sudo ./pmctl.py add-to-group games roblox
-sudo ./pmctl.py add-to-group games fortnite
+sudo ./cmctl.py add-to-group games minecraft
+sudo ./cmctl.py add-to-group games steam
+sudo ./cmctl.py add-to-group games roblox
+sudo ./cmctl.py add-to-group games fortnite
 
 # Set 2-hour group limit
-sudo ./pmctl.py group-limit games 120
+sudo ./cmctl.py group-limit games 120
 
 # Optional: Set stricter limits for specific games
-sudo ./pmctl.py limit fortnite 30  # Fortnite specifically limited to 30 min
+sudo ./cmctl.py limit fortnite 30  # Fortnite specifically limited to 30 min
 ```
 
 Result: User can play any combination of games for 2 hours total. Fortnite specifically can't exceed 30 minutes.
@@ -376,37 +376,37 @@ Result: User can play any combination of games for 2 hours total. Fortnite speci
 Balance educational and entertainment content:
 ```bash
 # Entertainment group (1.5 hours)
-sudo ./pmctl.py add-to-group entertainment youtube
-sudo ./pmctl.py add-to-group entertainment netflix
-sudo ./pmctl.py add-to-group entertainment vlc
-sudo ./pmctl.py group-limit entertainment 90
+sudo ./cmctl.py add-to-group entertainment youtube
+sudo ./cmctl.py add-to-group entertainment netflix
+sudo ./cmctl.py add-to-group entertainment vlc
+sudo ./cmctl.py group-limit entertainment 90
 
 # Educational group (3 hours)
-sudo ./pmctl.py add-to-group educational khan-academy
-sudo ./pmctl.py add-to-group educational duolingo
-sudo ./pmctl.py group-limit educational 180
+sudo ./cmctl.py add-to-group educational khan-academy
+sudo ./cmctl.py add-to-group educational duolingo
+sudo ./cmctl.py group-limit educational 180
 ```
 
 ### Example 3: Social Media Control
 Limit all social media to 1 hour combined:
 ```bash
 # Create social media group
-sudo ./pmctl.py add-to-group social discord
-sudo ./pmctl.py add-to-group social telegram
-sudo ./pmctl.py add-to-group social slack
-sudo ./pmctl.py add-to-group social whatsapp
+sudo ./cmctl.py add-to-group social discord
+sudo ./cmctl.py add-to-group social telegram
+sudo ./cmctl.py add-to-group social slack
+sudo ./cmctl.py add-to-group social whatsapp
 
 # 1 hour total for all social apps
-sudo ./pmctl.py group-limit social 60
+sudo ./cmctl.py group-limit social 60
 ```
 
 ## File Locations
 
-- **Configuration**: `/etc/process-monitor/config.json`
-- **State/Usage Data**: `/var/lib/process-monitor/state.json`
-- **Logs**: `/var/log/process-monitor/monitor.log`
-- **Main Script**: `/usr/bin/process-monitor.py`
-- **Service File**: `/etc/systemd/system/process-monitor.service`
+- **Configuration**: `/etc/child-minder/config.json`
+- **State/Usage Data**: `/var/lib/child-minder/state.json`
+- **Logs**: `/var/log/child-minder/minder.log`
+- **Main Script**: `/usr/bin/child-minder.py`
+- **Service File**: `/etc/systemd/system/child-minder.service`
 
 ## Security Notes
 
@@ -420,7 +420,7 @@ sudo ./pmctl.py group-limit social 60
 ### Service Won't Start
 ```bash
 # Check for errors
-sudo journalctl -u process-monitor -n 50
+sudo journalctl -u child-minder -n 50
 # Verify Python and psutil installation
 python3 -c "import psutil; print('OK')"
 ```
@@ -428,10 +428,10 @@ python3 -c "import psutil; print('OK')"
 ### Processes Not Being Blocked
 - Verify the username is in `monitored_users`
 - Check process names match (case-insensitive partial match)
-- Ensure service is running: `sudo systemctl status process-monitor`
+- Ensure service is running: `sudo systemctl status child-minder`
 
 ### Time Limits Not Working
-- Check if usage is being tracked: `sudo ./pmctl.py usage`
+- Check if usage is being tracked: `sudo ./cmctl.py usage`
 - Verify process names in configuration
 - Check logs for any errors
 
@@ -446,16 +446,16 @@ To completely remove the system:
 
 ```bash
 # Stop and disable service
-sudo systemctl stop process-monitor
-sudo systemctl disable process-monitor
+sudo systemctl stop child-minder
+sudo systemctl disable child-minder
 
 # Remove files
-sudo rm /usr/bin/process-monitor.py
-sudo rm /usr/bin/pmctl.py
-sudo rm /etc/systemd/system/process-monitor.service
-sudo rm -rf /etc/process-monitor
-sudo rm -rf /var/lib/process-monitor
-sudo rm -rf /var/log/process-monitor
+sudo rm /usr/bin/child-minder.py
+sudo rm /usr/bin/cmctl.py
+sudo rm /etc/systemd/system/child-minder.service
+sudo rm -rf /etc/child-minder
+sudo rm -rf /var/lib/child-minder
+sudo rm -rf /var/log/child-minder
 
 # Reload systemd
 sudo systemctl daemon-reload
@@ -477,14 +477,14 @@ sudo systemctl daemon-reload
 You can create different configurations for different situations:
 ```bash
 # School days configuration
-sudo cp /etc/process-monitor/config.json /etc/process-monitor/config-school.json
+sudo cp /etc/child-minder/config.json /etc/child-minder/config-school.json
 
 # Weekend configuration  
-sudo cp /etc/process-monitor/config.json /etc/process-monitor/config-weekend.json
+sudo cp /etc/child-minder/config.json /etc/child-minder/config-weekend.json
 
 # Switch configurations
-sudo cp /etc/process-monitor/config-weekend.json /etc/process-monitor/config.json
-sudo systemctl reload process-monitor
+sudo cp /etc/child-minder/config-weekend.json /etc/child-minder/config.json
+sudo systemctl reload child-minder
 ```
 
 ### Scheduling Different Rules
@@ -494,17 +494,17 @@ Use cron to automatically switch configurations:
 sudo crontab -e
 
 # School days (Monday-Friday at 6 AM)
-0 6 * * 1-5 cp /etc/process-monitor/config-school.json /etc/process-monitor/config.json && systemctl reload process-monitor
+0 6 * * 1-5 cp /etc/child-minder/config-school.json /etc/child-minder/config.json && systemctl reload child-minder
 
 # Weekends (Saturday at 6 AM)
-0 6 * * 6 cp /etc/process-monitor/config-weekend.json /etc/process-monitor/config.json && systemctl reload process-monitor
+0 6 * * 6 cp /etc/child-minder/config-weekend.json /etc/child-minder/config.json && systemctl reload child-minder
 ```
 
 ## Support
 
 For issues or questions:
-1. Check the logs first: `sudo journalctl -u process-monitor -n 100`
-2. Verify configuration: `sudo ./pmctl.py config`
+1. Check the logs first: `sudo journalctl -u child-minder -n 100`
+2. Verify configuration: `sudo ./cmctl.py config`
 3. Test with verbose logging by modifying the service file
 
 ## License

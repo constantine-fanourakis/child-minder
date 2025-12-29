@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Process Monitor Update Script
+# Child Minder Update Script
 # Run with: sudo bash update.sh
 
 set -e
@@ -9,8 +9,8 @@ set -e
 REPO_URL="https://github.com/constantine-fanourakis/child-minder.git"
 TEMP_DIR=$(mktemp -d)
 
-echo "Process Monitor Update Script"
-echo "=============================="
+echo "Child Minder Update Script"
+echo "=========================="
 
 # Check if git is installed
 if ! command -v git &> /dev/null; then
@@ -33,9 +33,9 @@ echo ""
 bash install.sh
 
 # Restart service if running
-if systemctl is-active --quiet process-monitor; then
+if systemctl is-active --quiet child-minder; then
     echo "Restarting service..."
-    systemctl restart process-monitor
+    systemctl restart child-minder
     echo "Service restarted."
 fi
 

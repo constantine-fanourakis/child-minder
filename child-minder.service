@@ -1,5 +1,5 @@
 [Unit]
-Description=Process Monitor and Control Service
+Description=Child Minder - Process Monitor and Control Service
 After=network.target
 
 [Service]
@@ -7,7 +7,7 @@ Type=simple
 User=root
 Group=root
 WorkingDirectory=/usr/bin
-ExecStart=/usr/bin/python3 /usr/bin/process-monitor.py
+ExecStart=/usr/bin/python3 /usr/bin/child-minder.py
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
@@ -19,7 +19,7 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/lib/process-monitor /var/log/process-monitor
+ReadWritePaths=/var/lib/child-minder /var/log/child-minder
 
 [Install]
 WantedBy=multi-user.target

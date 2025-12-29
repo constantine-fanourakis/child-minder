@@ -1,4 +1,4 @@
-# Process Monitor - Quick Reference Guide
+# Child Minder - Quick Reference Guide
 
 ## Installation
 
@@ -8,98 +8,98 @@
 sudo bash install.sh
 
 # 3. Configure
-sudo nano /etc/process-monitor/config.json
+sudo nano /etc/child-minder/config.json
 
 # 4. Start service
-sudo systemctl start process-monitor
+sudo systemctl start child-minder
 ```
 
 ## Service Management
 
 ```bash
 # Start/Stop/Restart
-sudo systemctl start process-monitor
-sudo systemctl stop process-monitor
-sudo systemctl restart process-monitor
+sudo systemctl start child-minder
+sudo systemctl stop child-minder
+sudo systemctl restart child-minder
 
 # Check status
-sudo systemctl status process-monitor
+sudo systemctl status child-minder
 
 # View logs
-sudo journalctl -u process-monitor -f        # Live logs
-sudo tail -f /var/log/process-monitor/monitor.log  # File logs
+sudo journalctl -u child-minder -f        # Live logs
+sudo tail -f /var/log/child-minder/minder.log  # File logs
 ```
 
-## Configuration Management (`pmctl`)
+## Configuration Management (`cmctl`)
 
 ### View Current Setup
 ```bash
-sudo pmctl config    # Show all settings
-sudo pmctl usage     # Show today's usage
-sudo pmctl status    # Service status
-sudo pmctl logs      # Recent log entries
+sudo cmctl config    # Show all settings
+sudo cmctl usage     # Show today's usage
+sudo cmctl status    # Service status
+sudo cmctl logs      # Recent log entries
 ```
 
 ### Block/Unblock Applications
 ```bash
-sudo pmctl block discord       # Block Discord completely
-sudo pmctl unblock discord     # Remove block
+sudo cmctl block discord       # Block Discord completely
+sudo cmctl unblock discord     # Remove block
 ```
 
 ### Individual Time Limits
 ```bash
-sudo pmctl limit minecraft 60      # 60 minutes per day
-sudo pmctl limit firefox 120       # 2 hours per day
-sudo pmctl unlimit minecraft        # Remove limit
+sudo cmctl limit minecraft 60      # 60 minutes per day
+sudo cmctl limit firefox 120       # 2 hours per day
+sudo cmctl unlimit minecraft        # Remove limit
 ```
 
 ### Group Management
 ```bash
 # Create/modify groups
-sudo pmctl add-to-group games minecraft
-sudo pmctl add-to-group games steam
-sudo pmctl add-to-group games roblox
+sudo cmctl add-to-group games minecraft
+sudo cmctl add-to-group games steam
+sudo cmctl add-to-group games roblox
 
 # Set group limits (applies to all apps in group)
-sudo pmctl group-limit games 120    # 2 hours for all games combined
-sudo pmctl group-limit browsers 180 # 3 hours for all browsers
+sudo cmctl group-limit games 120    # 2 hours for all games combined
+sudo cmctl group-limit browsers 180 # 3 hours for all browsers
 
 # View groups
-sudo pmctl groups
+sudo cmctl groups
 
 # Remove from group
-sudo pmctl remove-from-group games minecraft
+sudo cmctl remove-from-group games minecraft
 
 # Remove group limit
-sudo pmctl group-unlimit games
+sudo cmctl group-unlimit games
 ```
 
 ### User Management
 ```bash
 # Add/remove monitored users
-sudo pmctl add-user johnny
-sudo pmctl remove-user johnny
+sudo cmctl add-user johnny
+sudo cmctl remove-user johnny
 
 # Disable user account (immediate logout)
-sudo pmctl disable-user johnny -r "Not doing homework"
-sudo pmctl disable-user johnny -t 2 -r "2 hour timeout"  # Auto re-enable
+sudo cmctl disable-user johnny -r "Not doing homework"
+sudo cmctl disable-user johnny -t 2 -r "2 hour timeout"  # Auto re-enable
 
 # Re-enable user
-sudo pmctl enable-user johnny
+sudo cmctl enable-user johnny
 
 # Set access hours (e.g., 8 AM to 9 PM)
-sudo pmctl set-user-hours johnny 8 21
+sudo cmctl set-user-hours johnny 8 21
 
 # Check user status
-sudo pmctl user-status johnny
-sudo pmctl user-status  # Show all disabled users
+sudo cmctl user-status johnny
+sudo cmctl user-status  # Show all disabled users
 ```
 
 ### System Control
 ```bash
-sudo pmctl enable     # Enable monitoring
-sudo pmctl disable    # Disable monitoring (temporary)
-sudo pmctl reset      # Reset daily usage counters
+sudo cmctl enable     # Enable monitoring
+sudo cmctl disable    # Disable monitoring (temporary)
+sudo cmctl reset      # Reset daily usage counters
 ```
 
 ## Common Scenarios
@@ -107,60 +107,60 @@ sudo pmctl reset      # Reset daily usage counters
 ### Initial Setup for Child
 ```bash
 # 1. Add child's username
-sudo pmctl add-user johnny
+sudo cmctl add-user johnny
 
 # 2. Block inappropriate apps
-sudo pmctl block discord
-sudo pmctl block telegram
+sudo cmctl block discord
+sudo cmctl block telegram
 
 # 3. Set up game limits
-sudo pmctl add-to-group games minecraft
-sudo pmctl add-to-group games steam
-sudo pmctl group-limit games 120  # 2 hours total
+sudo cmctl add-to-group games minecraft
+sudo cmctl add-to-group games steam
+sudo cmctl group-limit games 120  # 2 hours total
 
 # 4. Set browser limits
-sudo pmctl limit firefox 180  # 3 hours
+sudo cmctl limit firefox 180  # 3 hours
 
 # 5. Set school day hours (3 PM to 8 PM)
-sudo pmctl set-user-hours johnny 15 20
+sudo cmctl set-user-hours johnny 15 20
 ```
 
 ### Weekend vs Weekday Rules
 ```bash
 # Weekday (strict)
-sudo pmctl group-limit games 60
-sudo pmctl set-user-hours johnny 15 20
+sudo cmctl group-limit games 60
+sudo cmctl set-user-hours johnny 15 20
 
 # Weekend (relaxed)
-sudo pmctl group-limit games 180
-sudo pmctl set-user-hours johnny 8 22
+sudo cmctl group-limit games 180
+sudo cmctl set-user-hours johnny 8 22
 ```
 
 ### Quick Punishments
 ```bash
 # 30-minute timeout
-sudo pmctl disable-user johnny -t 0.5 -r "Broke rules"
+sudo cmctl disable-user johnny -t 0.5 -r "Broke rules"
 
 # 2-hour timeout
-sudo pmctl disable-user johnny -t 2 -r "Not listening"
+sudo cmctl disable-user johnny -t 2 -r "Not listening"
 
 # Rest of the day
-sudo pmctl disable-user johnny -r "Done for today"
-# (Re-enable manually tomorrow with: sudo pmctl enable-user johnny)
+sudo cmctl disable-user johnny -r "Done for today"
+# (Re-enable manually tomorrow with: sudo cmctl enable-user johnny)
 ```
 
 ### Emergency Override
 ```bash
 # Temporarily stop monitoring
-sudo systemctl stop process-monitor
+sudo systemctl stop child-minder
 
 # Give extra time for special occasion
-sudo pmctl limit minecraft 180  # Triple time today
+sudo cmctl limit minecraft 180  # Triple time today
 # Remember to change back tomorrow!
 
 # Complete disable for vacation
-sudo pmctl disable
-# Re-enable later with: sudo pmctl enable
+sudo cmctl disable
+# Re-enable later with: sudo cmctl enable
 ```
 
 ## Troubleshooting
@@ -168,10 +168,10 @@ sudo pmctl disable
 ### Service Won't Start
 ```bash
 # Check for errors
-sudo journalctl -u process-monitor -n 50
+sudo journalctl -u child-minder -n 50
 
 # Validate config
-python3 -c "import json; json.load(open('/etc/process-monitor/config.json'))"
+python3 -c "import json; json.load(open('/etc/child-minder/config.json'))"
 
 # Check Python modules
 python3 -c "import psutil"
@@ -192,10 +192,10 @@ sudo apt install libnotify-bin dbus-x11
 ps aux | grep -i appname
 
 # Check if user is monitored
-sudo pmctl config | grep monitored_users
+sudo cmctl config | grep monitored_users
 
 # Check logs for errors
-sudo pmctl logs -n 100
+sudo cmctl logs -n 100
 ```
 
 ### User Can Still Login When Disabled
@@ -243,32 +243,32 @@ sudo passwd -S johnny  # Should show 'L'
 
 ## Important Files
 
-- **Config**: `/etc/process-monitor/config.json`
-- **State**: `/var/lib/process-monitor/state.json`
-- **User Control**: `/var/lib/process-monitor/user_control.json`
-- **Logs**: `/var/log/process-monitor/monitor.log`
-- **Service**: `/etc/systemd/system/process-monitor.service`
-- **Scripts**: `/usr/bin/process-monitor.py`, `/usr/bin/pmctl.py`
+- **Config**: `/etc/child-minder/config.json`
+- **State**: `/var/lib/child-minder/state.json`
+- **User Control**: `/var/lib/child-minder/user_control.json`
+- **Logs**: `/var/log/child-minder/minder.log`
+- **Service**: `/etc/systemd/system/child-minder.service`
+- **Scripts**: `/usr/bin/child-minder.py`, `/usr/bin/cmctl.py`
 
 ## Safety Commands
 
 ```bash
 # Complete uninstall
-sudo systemctl stop process-monitor
-sudo systemctl disable process-monitor
-sudo rm -rf /etc/process-monitor
-sudo rm -rf /var/lib/process-monitor
-sudo rm -rf /var/log/process-monitor
-sudo rm /usr/bin/process-monitor.py
-sudo rm /usr/bin/pmctl*
-sudo rm /etc/systemd/system/process-monitor.service
+sudo systemctl stop child-minder
+sudo systemctl disable child-minder
+sudo rm -rf /etc/child-minder
+sudo rm -rf /var/lib/child-minder
+sudo rm -rf /var/log/child-minder
+sudo rm /usr/bin/child-minder.py
+sudo rm /usr/bin/cmctl*
+sudo rm /etc/systemd/system/child-minder.service
 sudo systemctl daemon-reload
 
 # Backup configuration
-sudo cp -r /etc/process-monitor /etc/process-monitor.backup
+sudo cp -r /etc/child-minder /etc/child-minder.backup
 
 # Emergency: re-enable all users
-for user in $(sudo pmctl user-status | grep "^[a-z]" | cut -d: -f1); do
-    sudo pmctl enable-user $user
+for user in $(sudo cmctl user-status | grep "^[a-z]" | cut -d: -f1); do
+    sudo cmctl enable-user $user
 done
 ```

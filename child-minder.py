@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Process Monitor and Control System
+Child Minder - Process Monitor and Control System
 A parental control system for monitoring and limiting application usage on Linux
 """
 
@@ -19,11 +19,11 @@ import pwd
 import subprocess
 
 # Default paths
-DEFAULT_CONFIG_PATH = "/etc/process-monitor/config.json"
-DEFAULT_STATE_PATH = "/var/lib/process-monitor/state.json"
-DEFAULT_LOG_PATH = "/var/log/process-monitor/monitor.log"
+DEFAULT_CONFIG_PATH = "/etc/child-minder/config.json"
+DEFAULT_STATE_PATH = "/var/lib/child-minder/state.json"
+DEFAULT_LOG_PATH = "/var/log/child-minder/minder.log"
 
-class ProcessMonitor:
+class ChildMinder:
     def __init__(self, config_path: str, state_path: str, log_path: str):
         self.config_path = Path(config_path)
         self.state_path = Path(state_path)
@@ -53,7 +53,7 @@ class ProcessMonitor:
         self.warned_groups: Dict[str, Dict[str, Set[int]]] = {}  # group -> user -> warning times
         
         # User control state file
-        self.user_control_file = Path("/var/lib/process-monitor/user_control.json")
+        self.user_control_file = Path("/var/lib/child-minder/user_control.json")
         self.user_control_state = self.load_user_control_state()
         
         # Running flag
@@ -726,7 +726,7 @@ class ProcessMonitor:
         
     def run(self):
         """Main monitoring loop"""
-        self.logger.info("Process Monitor started")
+        self.logger.info("Child Minder started")
         
         # Load saved usage data (with backward compatibility)
         if "daily_usage" in self.state:
@@ -767,18 +767,18 @@ class ProcessMonitor:
                 self.logger.error(f"Error in main loop: {e}")
                 time.sleep(5)
                 
-        self.logger.info("Process Monitor stopped")
+        self.logger.info("Child Minder stopped")
 
 def main():
-    parser = argparse.ArgumentParser(description='Process Monitor and Control System')
+    parser = argparse.ArgumentParser(description='Child Minder - Process Monitor and Control System')
     parser.add_argument('--config', default=DEFAULT_CONFIG_PATH, help='Path to config file')
     parser.add_argument('--state', default=DEFAULT_STATE_PATH, help='Path to state file')
     parser.add_argument('--log', default=DEFAULT_LOG_PATH, help='Path to log file')
-    
+
     args = parser.parse_args()
-    
-    monitor = ProcessMonitor(args.config, args.state, args.log)
-    monitor.run()
+
+    minder = ChildMinder(args.config, args.state, args.log)
+    minder.run()
 
 if __name__ == "__main__":
     main()

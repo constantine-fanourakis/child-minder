@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Process Monitor Management Utility
-Provides easy management and reporting for the process monitor system
+Child Minder Management Utility (cmctl)
+Provides easy management and reporting for the Child Minder system
 """
 
 import json
@@ -13,16 +13,16 @@ from typing import Dict, Optional
 import subprocess
 import pwd
 
-CONFIG_PATH = "/etc/process-monitor/config.json"
-STATE_PATH = "/var/lib/process-monitor/state.json"
-LOG_PATH = "/var/log/process-monitor/monitor.log"
+CONFIG_PATH = "/etc/child-minder/config.json"
+STATE_PATH = "/var/lib/child-minder/state.json"
+LOG_PATH = "/var/log/child-minder/minder.log"
 
-class ProcessMonitorManager:
+class ChildMinderManager:
     def __init__(self):
         self.config_path = Path(CONFIG_PATH)
         self.state_path = Path(STATE_PATH)
         self.log_path = Path(LOG_PATH)
-        self.user_control_path = Path("/var/lib/process-monitor/user_control.json")
+        self.user_control_path = Path("/var/lib/child-minder/user_control.json")
         
     def load_config(self) -> dict:
         """Load current configuration"""
@@ -43,7 +43,7 @@ class ProcessMonitorManager:
                 json.dump(config, f, indent=2)
             print("Configuration saved successfully")
             # Reload service
-            subprocess.run(['systemctl', 'reload', 'process-monitor'], check=False)
+            subprocess.run(['systemctl', 'reload', 'child-minder'], check=False)
         except Exception as e:
             print(f"Error saving config: {e}")
             sys.exit(1)
@@ -277,7 +277,7 @@ class ProcessMonitorManager:
             
     def service_status(self):
         """Show service status"""
-        result = subprocess.run(['systemctl', 'status', 'process-monitor'], 
+        result = subprocess.run(['systemctl', 'status', 'child-minder'],
                               capture_output=True, text=True)
         print(result.stdout)
         
@@ -465,7 +465,7 @@ class ProcessMonitorManager:
             print(f"Error showing user status: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Process Monitor Management Utility')
+    parser = argparse.ArgumentParser(description='Child Minder Management Utility (cmctl)')
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
     # Block/unblock commands
@@ -544,7 +544,7 @@ def main():
         parser.print_help()
         sys.exit(0)
         
-    manager = ProcessMonitorManager()
+    manager = ChildMinderManager()
     
     if args.command == 'block':
         manager.add_blocked_process(args.process)

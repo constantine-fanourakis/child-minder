@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Process Monitor System Test Script
+# Child Minder System Test Script
 # Run after installation to verify everything works
-# Run with: sudo bash test-process-monitor.sh
+# Run with: sudo bash test-child-minder.sh
 
 set -e
 
@@ -11,11 +11,11 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}Process Monitor System Test Script${NC}"
-echo "===================================="
+echo -e "${GREEN}Child Minder System Test Script${NC}"
+echo "================================="
 
 # Check if running as root
-if [ "$EUID" -ne 0 ]; then 
+if [ "$EUID" -ne 0 ]; then
    echo -e "${RED}Please run as root (use sudo)${NC}"
    exit 1
 fi
@@ -57,35 +57,35 @@ else
 fi
 
 # Test 3: Check if service file exists
-if test_feature "service file" '[ -f /etc/systemd/system/process-monitor.service ]'; then
+if test_feature "service file" '[ -f /etc/systemd/system/child-minder.service ]'; then
     ((PASSED++))
 else
     ((FAILED++))
 fi
 
 # Test 4: Check if main script exists
-if test_feature "main script" '[ -f /usr/bin/process-monitor.py ]'; then
+if test_feature "main script" '[ -f /usr/bin/child-minder.py ]'; then
     ((PASSED++))
 else
     ((FAILED++))
 fi
 
 # Test 5: Check if management utility exists
-if test_feature "management utility" '[ -f /usr/bin/pmctl.py ]'; then
+if test_feature "management utility" '[ -f /usr/bin/cmctl.py ]'; then
     ((PASSED++))
 else
     ((FAILED++))
 fi
 
 # Test 6: Check if config file exists
-if test_feature "config file" '[ -f /etc/process-monitor/config.json ]'; then
+if test_feature "config file" '[ -f /etc/child-minder/config.json ]'; then
     ((PASSED++))
 else
     ((FAILED++))
 fi
 
 # Test 7: Check if directories exist
-if test_feature "required directories" '[ -d /var/lib/process-monitor ] && [ -d /var/log/process-monitor ]'; then
+if test_feature "required directories" '[ -d /var/lib/child-minder ] && [ -d /var/log/child-minder ]'; then
     ((PASSED++))
 else
     ((FAILED++))
@@ -99,22 +99,22 @@ else
     echo "  Warning: Desktop notifications may not work"
 fi
 
-# Test 9: Test pmctl command
-if test_feature "pmctl command" '/usr/bin/pmctl config > /dev/null'; then
+# Test 9: Test cmctl command
+if test_feature "cmctl command" '/usr/bin/cmctl config > /dev/null'; then
     ((PASSED++))
 else
     ((FAILED++))
 fi
 
 # Test 10: Check if service can be loaded
-if test_feature "service loading" 'systemctl daemon-reload && systemctl status process-monitor > /dev/null 2>&1 || [ $? -eq 3 ]'; then
+if test_feature "service loading" 'systemctl daemon-reload && systemctl status child-minder > /dev/null 2>&1 || [ $? -eq 3 ]'; then
     ((PASSED++))
 else
     ((FAILED++))
 fi
 
 echo ""
-echo "===================================="
+echo "================================="
 echo -e "Test Results: ${GREEN}$PASSED passed${NC}, ${RED}$FAILED failed${NC}"
 echo ""
 
@@ -122,10 +122,10 @@ if [ $FAILED -eq 0 ]; then
     echo -e "${GREEN}All tests passed! The system is ready to use.${NC}"
     echo ""
     echo "Next steps:"
-    echo "1. Edit config: sudo nano /etc/process-monitor/config.json"
+    echo "1. Edit config: sudo nano /etc/child-minder/config.json"
     echo "2. Add a test user to 'monitored_users'"
-    echo "3. Start service: sudo systemctl start process-monitor"
-    echo "4. Check status: sudo systemctl status process-monitor"
+    echo "3. Start service: sudo systemctl start child-minder"
+    echo "4. Check status: sudo systemctl status child-minder"
 else
     echo -e "${YELLOW}Some tests failed. Please check the installation.${NC}"
     echo ""
@@ -146,7 +146,7 @@ python3 -c "
 import json
 import sys
 try:
-    with open('/etc/process-monitor/config.json', 'r') as f:
+    with open('/etc/child-minder/config.json', 'r') as f:
         config = json.load(f)
     print('Configuration is valid JSON')
     if not config.get('monitored_users'):
