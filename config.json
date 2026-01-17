@@ -5,10 +5,9 @@
     "son_username"
   ],
   "blocked_processes": [
-    "discord",
-    "telegram",
     "example_game"
   ],
+  "blocked_processes_comment": "Apps listed here are always blocked. Don't duplicate apps that are in groups with limits.",
   "process_groups": {
     "games": [
       "minecraft",
@@ -39,7 +38,8 @@
   "group_limits": {
     "games": 120,
     "browsers": 180,
-    "entertainment": 90
+    "entertainment": 90,
+    "social": 60
   },
   "limited_processes": {
     "minecraft": 60,

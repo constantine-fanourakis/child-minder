@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Dict, Set, Optional
 import pwd
 import subprocess
+import shlex
+import re
 
 # Default paths
 DEFAULT_CONFIG_PATH = "/etc/child-minder/config.json"
@@ -94,7 +96,7 @@ class ChildMinder:
             with open(self.config_path, 'r') as f:
                 config = json.load(f)
                 self.logger.info("Configuration loaded successfully")
-                return config
+                return self.validate_config(config)
         except FileNotFoundError:
             self.logger.error(f"Config file not found at {self.config_path}")
             # Return default configuration
@@ -102,7 +104,44 @@ class ChildMinder:
         except json.JSONDecodeError as e:
             self.logger.error(f"Error parsing config file: {e}")
             sys.exit(1)
-            
+
+    def validate_config(self, config: dict) -> dict:
+        """Validate and fill in missing config keys with defaults"""
+        defaults = self.get_default_config()
+
+        # Ensure all required keys exist
+        for key, default_value in defaults.items():
+            if key not in config:
+                self.logger.warning(f"Config missing '{key}', using default: {default_value}")
+                config[key] = default_value
+            elif isinstance(default_value, dict) and isinstance(config[key], dict):
+                # Recursively fill in nested dicts
+                for subkey, subdefault in default_value.items():
+                    if subkey not in config[key]:
+                        config[key][subkey] = subdefault
+
+        # Validate specific values
+        if not isinstance(config.get('check_interval'), (int, float)) or config['check_interval'] <= 0:
+            self.logger.warning(f"Invalid check_interval, using default: 5")
+            config['check_interval'] = 5
+
+        if not isinstance(config.get('monitored_users'), list):
+            config['monitored_users'] = []
+
+        if not isinstance(config.get('blocked_processes'), list):
+            config['blocked_processes'] = []
+
+        if not isinstance(config.get('limited_processes'), dict):
+            config['limited_processes'] = {}
+
+        if not isinstance(config.get('process_groups'), dict):
+            config['process_groups'] = {}
+
+        if not isinstance(config.get('group_limits'), dict):
+            config['group_limits'] = {}
+
+        return config
+
     def get_default_config(self) -> dict:
         """Return default configuration"""
         return {
@@ -144,15 +183,18 @@ class ChildMinder:
         }
         
     def save_state(self):
-        """Save current state to file"""
+        """Save current state to file using atomic write"""
         try:
             state = {
                 "daily_usage": self.serialize_usage(),
                 "group_usage": self.group_usage,
                 "last_reset": self.state.get("last_reset", datetime.now().isoformat())
             }
-            with open(self.state_path, 'w') as f:
+            # Atomic write: write to temp file then rename
+            temp_file = self.state_path.with_suffix('.tmp')
+            with open(temp_file, 'w') as f:
                 json.dump(state, f, indent=2)
+            temp_file.rename(self.state_path)
         except Exception as e:
             self.logger.error(f"Error saving state: {e}")
             
@@ -275,75 +317,40 @@ class ChildMinder:
         return None
     
     def warn_user_group(self, username: str, group_name: str, remaining_minutes: int):
-        """Send warning to user about group time limit with improved methods"""
+        """Send warning to user about group time limit"""
         try:
+            # Ensure remaining_minutes is non-negative
+            remaining_minutes = max(0, remaining_minutes)
+
             # Determine urgency based on time
             urgency = 'critical' if remaining_minutes <= 5 else 'normal'
-            title = "⚠️ Group Time Limit Warning" if remaining_minutes > 1 else "🚨 FINAL GROUP WARNING"
-            
+            title = "Group Time Limit Warning" if remaining_minutes > 1 else "FINAL GROUP WARNING"
+
             # Build message
             message = (f"Group '{group_name}' has {remaining_minutes} minute{'s' if remaining_minutes > 1 else ''} remaining today. "
                       f"All apps in this group will close when time expires.")
             if remaining_minutes <= 2:
                 message += " SAVE YOUR WORK NOW!"
-            
-            # Get user display
-            display = self.get_user_display(username)
-            
-            # Try to get user ID for DBUS
-            uid = None
-            try:
-                uid = pwd.getpwnam(username).pw_uid
-                dbus_addr = f"unix:path=/run/user/{uid}/bus"
-            except KeyError:
-                dbus_addr = ""
 
-            success = False
+            # Send notification using safe method
+            play_sound = remaining_minutes <= 5
+            success = self.send_notification(username, title, message, urgency, play_sound)
 
-            # Method 1: notify-send with proper DBUS
-            if dbus_addr and uid and os.path.exists(f"/run/user/{uid}/bus"):
-                cmd = (f'sudo -u {username} DISPLAY={display} '
-                      f'DBUS_SESSION_BUS_ADDRESS={dbus_addr} '
-                      f'notify-send -u {urgency} -t 10000 '
-                      f'"{title}" "{message}"')
-                result = subprocess.run(cmd, shell=True, capture_output=True, timeout=2)
-                if result.returncode == 0:
-                    success = True
-            
-            # Method 2: Try without DBUS
-            if not success:
-                cmd = f'sudo -u {username} DISPLAY={display} notify-send -u {urgency} "{title}" "{message}"'
-                result = subprocess.run(cmd, shell=True, capture_output=True, timeout=2)
-                if result.returncode == 0:
-                    success = True
-            
-            # Method 3: Wall message for critical
+            # Wall message for critical warnings
             if remaining_minutes <= 2:
-                subprocess.run(['wall', f"GROUP WARNING: {message}"], capture_output=True, timeout=2)
-                success = True
-            
-            # Play sound for critical warnings
-            if remaining_minutes <= 5:
-                sound_files = [
-                    '/usr/share/sounds/freedesktop/stereo/dialog-warning.oga',
-                    '/usr/share/sounds/ubuntu/stereo/dialog-warning.ogg',
-                    '/usr/share/sounds/gnome/default/alerts/glass.ogg'
-                ]
-                for sound in sound_files:
-                    if os.path.exists(sound):
-                        subprocess.run(f'sudo -u {username} DISPLAY={display} paplay {sound} 2>/dev/null &',
-                                     shell=True, capture_output=True)
-                        break
-            
+                try:
+                    subprocess.run(['wall', f"GROUP WARNING: {message}"], capture_output=True, timeout=2)
+                    success = True
+                except subprocess.TimeoutExpired:
+                    pass
+
             if success:
                 self.logger.info(f"Warned user {username} about group '{group_name}' time limit ({remaining_minutes} min remaining)")
             else:
                 self.logger.warning(f"Could not send desktop notification for {username}, using wall")
                 subprocess.run(['wall', f"GROUP WARNING: {group_name} has {remaining_minutes} minutes left"],
                              capture_output=True, timeout=2)
-            
-        except subprocess.TimeoutExpired:
-            self.logger.error("Group warning command timed out")
+
         except Exception as e:
             self.logger.error(f"Error in group warning system: {e}")
     
@@ -405,56 +412,36 @@ class ChildMinder:
             self.logger.debug(f"Could not terminate process: {e}")
             
     def warn_user(self, proc: psutil.Process, remaining_minutes: int):
-        """Send warning to user about time limit with improved methods"""
+        """Send warning to user about time limit"""
         try:
             username = self.get_username(proc.uids().real)
             process_name = proc.name()
-            
+
+            # Ensure remaining_minutes is non-negative
+            remaining_minutes = max(0, remaining_minutes)
+
             # Determine urgency based on time
             urgency = 'critical' if remaining_minutes <= 5 else 'normal'
-            title = "⚠️ Time Limit Warning" if remaining_minutes > 1 else "🚨 FINAL WARNING"
-            
+            title = "Time Limit Warning" if remaining_minutes > 1 else "FINAL WARNING"
+
             # Build message
             message = f"{process_name} has {remaining_minutes} minute{'s' if remaining_minutes > 1 else ''} remaining today."
             if remaining_minutes <= 2:
                 message += " SAVE YOUR WORK NOW!"
-            
-            # Get user display
-            display = self.get_user_display(username)
-            
-            # Try to get user ID for DBUS
-            uid = None
-            try:
-                uid = pwd.getpwnam(username).pw_uid
-                dbus_addr = f"unix:path=/run/user/{uid}/bus"
-            except KeyError:
-                dbus_addr = ""
 
-            success = False
+            # Send notification using safe method
+            play_sound = remaining_minutes <= 5
+            success = self.send_notification(username, title, message, urgency, play_sound)
 
-            # Method 1: notify-send with proper DBUS
-            if dbus_addr and uid and os.path.exists(f"/run/user/{uid}/bus"):
-                cmd = (f'sudo -u {username} DISPLAY={display} '
-                      f'DBUS_SESSION_BUS_ADDRESS={dbus_addr} '
-                      f'notify-send -u {urgency} -t 10000 '
-                      f'"{title}" "{message}"')
-                result = subprocess.run(cmd, shell=True, capture_output=True, timeout=2)
-                if result.returncode == 0:
-                    success = True
-            
-            # Method 2: Try without DBUS (some systems don't need it)
-            if not success:
-                cmd = f'sudo -u {username} DISPLAY={display} notify-send -u {urgency} "{title}" "{message}"'
-                result = subprocess.run(cmd, shell=True, capture_output=True, timeout=2)
-                if result.returncode == 0:
-                    success = True
-            
-            # Method 3: Wall message for critical warnings
+            # Wall message for critical warnings
             if remaining_minutes <= 2:
-                subprocess.run(['wall', f"WARNING: {message}"], capture_output=True, timeout=2)
-                success = True
-            
-            # Method 4: Terminal message for active terminals
+                try:
+                    subprocess.run(['wall', f"WARNING: {message}"], capture_output=True, timeout=2)
+                    success = True
+                except subprocess.TimeoutExpired:
+                    pass
+
+            # Terminal message for active terminals (critical warnings only)
             if remaining_minutes <= 5:
                 try:
                     for proc_iter in psutil.process_iter(['username', 'terminal']):
@@ -468,29 +455,14 @@ class ChildMinder:
                                 continue
                 except Exception:
                     pass
-            
-            # Play sound for critical warnings
-            if remaining_minutes <= 5:
-                sound_files = [
-                    '/usr/share/sounds/freedesktop/stereo/dialog-warning.oga',
-                    '/usr/share/sounds/ubuntu/stereo/dialog-warning.ogg',
-                    '/usr/share/sounds/gnome/default/alerts/glass.ogg'
-                ]
-                for sound in sound_files:
-                    if os.path.exists(sound):
-                        subprocess.run(f'sudo -u {username} DISPLAY={display} paplay {sound} 2>/dev/null &', 
-                                     shell=True, capture_output=True)
-                        break
-            
+
             if success:
                 self.logger.info(f"Warned user {username} about {process_name} time limit ({remaining_minutes} min remaining)")
             else:
                 self.logger.warning(f"Could not send desktop notification for {username}, using wall")
-                subprocess.run(['wall', f"TIME WARNING: {process_name} has {remaining_minutes} minutes left"], 
+                subprocess.run(['wall', f"TIME WARNING: {process_name} has {remaining_minutes} minutes left"],
                              capture_output=True, timeout=2)
-            
-        except subprocess.TimeoutExpired:
-            self.logger.error("Warning command timed out")
+
         except Exception as e:
             self.logger.error(f"Error in warning system: {e}")
     
@@ -509,6 +481,92 @@ class ChildMinder:
         except Exception:
             pass
         return ':0'  # Default fallback
+
+    def is_valid_username(self, username: str) -> bool:
+        """Validate username to prevent injection attacks"""
+        # Valid Unix usernames: alphanumeric, underscore, hyphen, start with letter/underscore
+        if not username or len(username) > 32:
+            return False
+        return bool(re.match(r'^[a-z_][a-z0-9_-]*$', username, re.IGNORECASE))
+
+    def is_valid_display(self, display: str) -> bool:
+        """Validate display string to prevent injection"""
+        # Valid display format: :N or :N.M or hostname:N
+        if not display:
+            return False
+        return bool(re.match(r'^[a-zA-Z0-9._-]*:[0-9]+(\.[0-9]+)?$', display))
+
+    def send_notification(self, username: str, title: str, message: str,
+                         urgency: str = 'normal', play_sound: bool = False) -> bool:
+        """Safely send a desktop notification to a user without shell injection"""
+        # Validate inputs
+        if not self.is_valid_username(username):
+            self.logger.error(f"Invalid username for notification: {username}")
+            return False
+
+        display = self.get_user_display(username)
+        if not self.is_valid_display(display):
+            display = ':0'
+
+        if urgency not in ('low', 'normal', 'critical'):
+            urgency = 'normal'
+
+        # Get user ID for DBUS
+        try:
+            uid = pwd.getpwnam(username).pw_uid
+            dbus_addr = f"unix:path=/run/user/{uid}/bus"
+        except KeyError:
+            self.logger.warning(f"User {username} not found in passwd")
+            return False
+
+        success = False
+        env = os.environ.copy()
+        env['DISPLAY'] = display
+
+        # Method 1: notify-send with DBUS
+        if os.path.exists(f"/run/user/{uid}/bus"):
+            env['DBUS_SESSION_BUS_ADDRESS'] = dbus_addr
+            try:
+                result = subprocess.run(
+                    ['sudo', '-u', username, 'notify-send', '-u', urgency, '-t', '10000', title, message],
+                    capture_output=True, timeout=2, env=env
+                )
+                if result.returncode == 0:
+                    success = True
+            except subprocess.TimeoutExpired:
+                pass
+
+        # Method 2: Try without explicit DBUS
+        if not success:
+            try:
+                result = subprocess.run(
+                    ['sudo', '-u', username, 'notify-send', '-u', urgency, title, message],
+                    capture_output=True, timeout=2, env=env
+                )
+                if result.returncode == 0:
+                    success = True
+            except subprocess.TimeoutExpired:
+                pass
+
+        # Play sound if requested
+        if play_sound:
+            sound_files = [
+                '/usr/share/sounds/freedesktop/stereo/dialog-warning.oga',
+                '/usr/share/sounds/ubuntu/stereo/dialog-warning.ogg',
+                '/usr/share/sounds/gnome/default/alerts/glass.ogg'
+            ]
+            for sound in sound_files:
+                if os.path.exists(sound):
+                    try:
+                        subprocess.Popen(
+                            ['sudo', '-u', username, 'paplay', sound],
+                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        )
+                    except Exception:
+                        pass
+                    break
+
+        return success
 
     def load_user_control_state(self) -> dict:
         """Load user control state from file"""
@@ -547,20 +605,71 @@ class ChildMinder:
         except Exception as e:
             self.logger.error(f"Error killing processes for user {username}: {e}")
 
-    def handle_disabled_user(self, username: str):
-        """Handle a disabled user account - kill all their processes"""
+    def handle_disabled_user(self, username: str) -> bool:
+        """Handle a disabled user account - check for auto-restore or kill processes
+
+        Returns True if user was re-enabled, False otherwise.
+        """
         try:
             user_info = self.user_control_state.get("disabled_users", {}).get(username, {})
             if not user_info:
-                return
+                return False
 
+            # Check if timed disable has expired
+            re_enable_at = user_info.get("re_enable_at")
+            if re_enable_at:
+                re_enable_time = datetime.fromisoformat(re_enable_at)
+                if datetime.now() >= re_enable_time:
+                    # Time has passed, re-enable the user
+                    self.logger.info(f"Timed disable expired for user {username}, re-enabling account")
+                    self.enable_user_account(username)
+                    return True
+
+            # User is still disabled, kill their processes
             self.kill_user_processes(username)
+            return False
 
         except Exception as e:
             self.logger.error(f"Error handling disabled user {username}: {e}")
+            return False
+
+    def enable_user_account(self, username: str):
+        """Re-enable a disabled user account"""
+        try:
+            # Unlock the account
+            result = subprocess.run(['sudo', 'passwd', '-u', username],
+                                  capture_output=True, text=True)
+            if result.returncode != 0:
+                self.logger.error(f"Failed to unlock account {username}: {result.stderr}")
+                return
+
+            # Remove from disabled users in state
+            if username in self.user_control_state.get("disabled_users", {}):
+                del self.user_control_state["disabled_users"][username]
+                self.save_user_control_state()
+
+            self.logger.info(f"User account re-enabled: {username}")
+
+        except Exception as e:
+            self.logger.error(f"Error enabling user account {username}: {e}")
+
+    def save_user_control_state(self):
+        """Save the user control state to file"""
+        try:
+            self.user_control_file.parent.mkdir(parents=True, exist_ok=True)
+            # Atomic write: write to temp file then rename
+            temp_file = self.user_control_file.with_suffix('.tmp')
+            with open(temp_file, 'w') as f:
+                json.dump(self.user_control_state, f, indent=2)
+            temp_file.rename(self.user_control_file)
+        except Exception as e:
+            self.logger.error(f"Error saving user control state: {e}")
 
     def check_user_access_hours(self, username: str) -> bool:
-        """Check if user is within allowed access hours"""
+        """Check if user is within allowed access hours
+
+        Supports both regular hours (e.g., 8-22) and overnight hours (e.g., 22-6).
+        """
         try:
             daily_schedules = self.user_control_state.get("daily_schedules", {})
             if username not in daily_schedules:
@@ -571,11 +680,13 @@ class ChildMinder:
             start_hour = schedule.get("start_hour", 0)
             end_hour = schedule.get("end_hour", 24)
 
-            # Check if current time is within allowed hours
-            if start_hour <= current_hour < end_hour:
-                return True
+            # Handle overnight schedules (e.g., 22:00 to 06:00)
+            if start_hour > end_hour:
+                # Allowed if current hour is >= start OR < end
+                return current_hour >= start_hour or current_hour < end_hour
             else:
-                return False
+                # Regular schedule (e.g., 08:00 to 22:00)
+                return start_hour <= current_hour < end_hour
 
         except Exception as e:
             self.logger.error(f"Error checking access hours for {username}: {e}")
@@ -599,7 +710,7 @@ class ChildMinder:
                     self.kill_user_processes(username)
         
         # Regular process monitoring
-        for proc in psutil.process_iter(['pid', 'name', 'username', 'uids', 'create_time']):
+        for proc in psutil.process_iter(['pid', 'name', 'username', 'uids']):
             try:
                 # Get process info
                 pinfo = proc.info

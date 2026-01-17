@@ -1,7 +1,10 @@
 #!/bin/bash
 
-# Child Minder Installation Script
+# Child Minder Installation/Update Script
 # Run with sudo: sudo bash install.sh
+#
+# This script handles both fresh installations and updates.
+# On update, it preserves your existing configuration.
 
 set -e
 
@@ -12,6 +15,14 @@ echo "================================="
 if [ "$EUID" -ne 0 ]; then
    echo "Please run as root (use sudo)"
    exit 1
+fi
+
+# Detect if this is an update
+IS_UPDATE=false
+if [ -f /usr/bin/child-minder.py ] && [ -f /etc/child-minder/config.json ]; then
+    IS_UPDATE=true
+    echo "Existing installation detected - performing update"
+    echo ""
 fi
 
 # Check Python version
@@ -30,7 +41,7 @@ fi
 
 # Install required Python packages
 echo "Installing required Python packages..."
-pip3 install psutil || {
+pip3 install psutil 2>/dev/null || {
     echo "Failed to install with pip3, trying with system package manager..."
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update && apt-get install -y python3-psutil
@@ -50,16 +61,16 @@ pip3 install psutil || {
 echo "Installing notification support..."
 if command -v apt-get >/dev/null 2>&1; then
     # Debian/Ubuntu
-    apt-get install -y libnotify-bin pulseaudio-utils dbus-x11 || true
+    apt-get install -y libnotify-bin pulseaudio-utils dbus-x11 2>/dev/null || true
 elif command -v zypper >/dev/null 2>&1; then
     # openSUSE/SUSE
-    zypper --non-interactive install libnotify-tools pulseaudio-utils dbus-1-x11 || true
+    zypper --non-interactive install libnotify-tools pulseaudio-utils dbus-1-x11 2>/dev/null || true
 elif command -v yum >/dev/null 2>&1; then
     # RHEL/CentOS/Fedora
-    yum install -y libnotify pulseaudio-utils dbus-x11 || true
+    yum install -y libnotify pulseaudio-utils dbus-x11 2>/dev/null || true
 elif command -v pacman >/dev/null 2>&1; then
     # Arch Linux
-    pacman -S --noconfirm libnotify pulseaudio dbus || true
+    pacman -S --noconfirm libnotify pulseaudio dbus 2>/dev/null || true
 fi
 
 # Create directories
@@ -78,6 +89,12 @@ for file in "${REQUIRED_FILES[@]}"; do
     fi
 done
 
+# Stop service if running (for update)
+if $IS_UPDATE && systemctl is-active --quiet child-minder 2>/dev/null; then
+    echo "Stopping child-minder service for update..."
+    systemctl stop child-minder
+fi
+
 # Copy files
 echo "Copying files..."
 cp child-minder.py /usr/bin/
@@ -89,8 +106,9 @@ chmod +x /usr/bin/cmctl.py
 # Create convenience symlink for cmctl
 ln -sf /usr/bin/cmctl.py /usr/bin/cmctl
 
-# Check if config exists, don't overwrite if it does
+# Handle configuration file
 if [ ! -f /etc/child-minder/config.json ]; then
+    # Fresh install - copy default config
     cp config.json /etc/child-minder/
     chmod 600 /etc/child-minder/config.json
     echo "Configuration file created at /etc/child-minder/config.json"
@@ -99,7 +117,11 @@ if [ ! -f /etc/child-minder/config.json ]; then
     echo "  - Adjust 'blocked_processes' list"
     echo "  - Set time limits in 'limited_processes' (in minutes)"
 else
-    echo "Configuration file already exists, skipping..."
+    # Update - preserve existing config, but save new default as reference
+    cp config.json /etc/child-minder/config.json.new
+    chmod 600 /etc/child-minder/config.json.new
+    echo "Existing configuration preserved."
+    echo "New default config saved as /etc/child-minder/config.json.new for reference."
 fi
 
 # Set proper permissions
@@ -113,28 +135,47 @@ cp child-minder.service /etc/systemd/system/
 # Reload systemd
 systemctl daemon-reload
 
-# Enable service (but don't start it yet)
+# Enable service
 echo "Enabling service..."
 systemctl enable child-minder.service
 
-echo ""
-echo "Installation complete!"
-echo ""
-echo "Next steps:"
-echo "1. Edit the configuration file: sudo nano /etc/child-minder/config.json"
-echo "   - Add your child's username to 'monitored_users'"
-echo "   - Configure blocked processes and time limits"
-echo "2. Start the service: sudo systemctl start child-minder"
-echo "3. Check service status: sudo systemctl status child-minder"
-echo "4. View logs: sudo journalctl -u child-minder -f"
-echo ""
-echo "Useful commands:"
-echo "  - Stop service: sudo systemctl stop child-minder"
-echo "  - Restart service: sudo systemctl restart child-minder"
-echo "  - Management utility: sudo cmctl --help"
-echo "  - View detailed logs: sudo tail -f /var/log/child-minder/minder.log"
-echo ""
-echo "Testing recommendations:"
-echo "  - Test with a test user account first"
-echo "  - Start with monitoring only (no blocks or limits)"
-echo "  - Gradually add restrictions after testing"
+if $IS_UPDATE; then
+    # Update complete - restart service
+    echo "Starting child-minder service..."
+    systemctl start child-minder
+
+    echo ""
+    echo "Update complete!"
+    echo ""
+    echo "The service has been restarted with the new version."
+    echo "Your configuration has been preserved."
+    echo ""
+    echo "If there are new configuration options, check:"
+    echo "  /etc/child-minder/config.json.new"
+    echo ""
+    echo "Check service status: sudo systemctl status child-minder"
+    echo "View logs: sudo journalctl -u child-minder -f"
+else
+    # Fresh install
+    echo ""
+    echo "Installation complete!"
+    echo ""
+    echo "Next steps:"
+    echo "1. Edit the configuration file: sudo nano /etc/child-minder/config.json"
+    echo "   - Add your child's username to 'monitored_users'"
+    echo "   - Configure blocked processes and time limits"
+    echo "2. Start the service: sudo systemctl start child-minder"
+    echo "3. Check service status: sudo systemctl status child-minder"
+    echo "4. View logs: sudo journalctl -u child-minder -f"
+    echo ""
+    echo "Useful commands:"
+    echo "  - Stop service: sudo systemctl stop child-minder"
+    echo "  - Restart service: sudo systemctl restart child-minder"
+    echo "  - Management utility: sudo cmctl --help"
+    echo "  - View detailed logs: sudo tail -f /var/log/child-minder/minder.log"
+    echo ""
+    echo "Testing recommendations:"
+    echo "  - Test with a test user account first"
+    echo "  - Start with monitoring only (no blocks or limits)"
+    echo "  - Gradually add restrictions after testing"
+fi

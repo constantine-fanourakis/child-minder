@@ -151,23 +151,27 @@ class ChildMinderManager:
     def set_time_limit(self, process_name: str, minutes: int):
         """Set time limit for a process"""
         config = self.load_config()
+        if 'limited_processes' not in config:
+            config['limited_processes'] = {}
         config['limited_processes'][process_name] = minutes
         self.save_config(config)
         print(f"Set time limit for '{process_name}' to {minutes} minutes")
-        
+
     def remove_time_limit(self, process_name: str):
         """Remove time limit for a process"""
         config = self.load_config()
-        if process_name in config['limited_processes']:
+        if process_name in config.get('limited_processes', {}):
             del config['limited_processes'][process_name]
             self.save_config(config)
             print(f"Removed time limit for '{process_name}'")
         else:
             print(f"'{process_name}' has no time limit set")
-            
+
     def add_monitored_user(self, username: str):
         """Add a user to monitor"""
         config = self.load_config()
+        if 'monitored_users' not in config:
+            config['monitored_users'] = []
         if username not in config['monitored_users']:
             config['monitored_users'].append(username)
             self.save_config(config)
@@ -372,34 +376,49 @@ class ChildMinderManager:
     def set_user_hours(self, username: str, start_hour: int, end_hour: int):
         """Set allowed access hours for a user"""
         try:
+            # Validate hour range
+            if not (0 <= start_hour <= 23):
+                print(f"Error: Start hour must be between 0 and 23, got {start_hour}")
+                return
+            if not (0 <= end_hour <= 23):
+                print(f"Error: End hour must be between 0 and 23, got {end_hour}")
+                return
+            if start_hour == end_hour:
+                print(f"Error: Start and end hours cannot be the same")
+                return
+
             # Load or create user control state
             user_control = {"disabled_users": {}, "scheduled_disables": {}, "daily_schedules": {}}
             if self.user_control_path.exists():
                 with open(self.user_control_path, 'r') as f:
                     user_control = json.load(f)
-            
+
             user_control["daily_schedules"][username] = {
                 "start_hour": start_hour,
                 "end_hour": end_hour,
                 "weekday": True,
                 "weekend": True
             }
-            
+
             # Save state
             self.user_control_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.user_control_path, 'w') as f:
                 json.dump(user_control, f, indent=2)
-            
+
             # Enable user control in main config
             config = self.load_config()
             if "user_control" not in config:
                 config["user_control"] = {}
             config["user_control"]["enabled"] = True
             self.save_config(config)
-            
-            print(f"Set access hours for {username}: {start_hour}:00 - {end_hour}:00")
+
+            if start_hour > end_hour:
+                # Overnight schedule
+                print(f"Set access hours for {username}: {start_hour}:00 - {end_hour}:00 (overnight)")
+            else:
+                print(f"Set access hours for {username}: {start_hour}:00 - {end_hour}:00")
             print("User will be automatically logged out outside these hours")
-            
+
         except Exception as e:
             print(f"Error setting user hours: {e}")
     

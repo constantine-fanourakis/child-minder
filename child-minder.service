@@ -19,7 +19,7 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/lib/child-minder /var/log/child-minder
+ReadWritePaths=/var/lib/child-minder /var/log/child-minder /etc/child-minder
 
 [Install]
 WantedBy=multi-user.target
