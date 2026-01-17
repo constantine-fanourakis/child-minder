@@ -537,8 +537,16 @@ def main():
     logs_parser.add_argument('-n', '--lines', type=int, default=50, help='Number of lines to show')
     
     # Enable/disable
-    subparsers.add_parser('enable', help='Enable monitoring')
-    subparsers.add_parser('disable', help='Disable monitoring')
+    subparsers.add_parser('enable', help='Enable monitoring',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description='Enable the child-minder monitoring service. This resumes tracking and enforcing time limits for all monitored users.',
+        epilog='Example: sudo cmctl enable')
+    subparsers.add_parser('disable', help='Disable monitoring',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description='Disable the child-minder monitoring service entirely. While disabled, no time tracking or process termination will occur. Use "cmctl enable" to resume monitoring.',
+        epilog='''Example: sudo cmctl disable
+
+Note: To disable a specific user account instead, use "cmctl disable-user <username>"''')
     
     # User account control
     disable_user_parser = subparsers.add_parser('disable-user', help='Disable a user account')
