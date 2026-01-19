@@ -665,11 +665,49 @@ class ChildMinder:
         except Exception as e:
             self.logger.error(f"Error saving user control state: {e}")
 
+    def _check_time_in_window(self, current_hour: int, start_hour: int, end_hour: int) -> bool:
+        """Check if current hour falls within a time window.
+
+        Supports both regular hours (e.g., 8-22) and overnight hours (e.g., 22-6).
+        """
+        if start_hour > end_hour:
+            # Overnight schedule: allowed if current hour is >= start OR < end
+            return current_hour >= start_hour or current_hour < end_hour
+        else:
+            # Regular schedule: allowed if current hour is within range
+            return start_hour <= current_hour < end_hour
+
+    def _normalize_schedule(self, schedule: dict) -> dict:
+        """Normalize schedule to the array format, handling all legacy formats."""
+        # Already in array format
+        if isinstance(schedule.get("weekday"), list):
+            return schedule
+
+        # Single dict format: {"weekday": {"start_hour": 8, "end_hour": 22}}
+        if isinstance(schedule.get("weekday"), dict):
+            weekday = schedule["weekday"]
+            weekend = schedule.get("weekend", weekday)
+            return {
+                "weekday": [weekday],
+                "weekend": [weekend] if weekend != weekday else [weekday]
+            }
+
+        # Old flat format: {"start_hour": 8, "end_hour": 22, "weekday": true}
+        if "start_hour" in schedule:
+            window = {"start_hour": schedule["start_hour"], "end_hour": schedule["end_hour"]}
+            return {
+                "weekday": [window],
+                "weekend": [window.copy()]
+            }
+
+        # Empty or unknown format
+        return {"weekday": [], "weekend": []}
+
     def check_user_access_hours(self, username: str) -> bool:
         """Check if user is within allowed access hours
 
         Supports both regular hours (e.g., 8-22) and overnight hours (e.g., 22-6).
-        Also supports separate weekday and weekend schedules.
+        Also supports separate weekday and weekend schedules with multiple time windows.
         """
         try:
             daily_schedules = self.user_control_state.get("daily_schedules", {})
@@ -683,29 +721,29 @@ class ChildMinder:
             # Determine if weekend (Saturday=5, Sunday=6)
             is_weekend = day_of_week >= 5
 
-            # Get appropriate schedule based on day of week
-            # Check if using new format (weekday/weekend as dicts)
-            if isinstance(schedule.get("weekday"), dict):
-                if is_weekend and "weekend" in schedule:
-                    day_schedule = schedule["weekend"]
-                elif "weekday" in schedule:
-                    day_schedule = schedule["weekday"]
-                else:
-                    return True  # No schedule defined
-            else:
-                # Legacy format support - use same schedule for all days
-                day_schedule = schedule
+            # Normalize schedule to array format
+            normalized = self._normalize_schedule(schedule)
 
-            start_hour = day_schedule.get("start_hour", 0)
-            end_hour = day_schedule.get("end_hour", 24)
-
-            # Handle overnight schedules (e.g., 22:00 to 06:00)
-            if start_hour > end_hour:
-                # Allowed if current hour is >= start OR < end
-                return current_hour >= start_hour or current_hour < end_hour
+            # Get appropriate windows based on day of week
+            if is_weekend:
+                windows = normalized.get("weekend", [])
             else:
-                # Regular schedule (e.g., 08:00 to 22:00)
-                return start_hour <= current_hour < end_hour
+                windows = normalized.get("weekday", [])
+
+            # If no windows defined for this day, deny access
+            # (User has a schedule entry, so parental controls are active)
+            if not windows:
+                return False
+
+            # Check if current time falls within ANY of the windows
+            for window in windows:
+                start_hour = window.get("start_hour", 0)
+                end_hour = window.get("end_hour", 24)
+                if self._check_time_in_window(current_hour, start_hour, end_hour):
+                    return True
+
+            # Current time is not within any allowed window
+            return False
 
         except Exception as e:
             self.logger.error(f"Error checking access hours for {username}: {e}")
