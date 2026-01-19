@@ -669,6 +669,7 @@ class ChildMinder:
         """Check if user is within allowed access hours
 
         Supports both regular hours (e.g., 8-22) and overnight hours (e.g., 22-6).
+        Also supports separate weekday and weekend schedules.
         """
         try:
             daily_schedules = self.user_control_state.get("daily_schedules", {})
@@ -677,8 +678,26 @@ class ChildMinder:
 
             schedule = daily_schedules[username]
             current_hour = datetime.now().hour
-            start_hour = schedule.get("start_hour", 0)
-            end_hour = schedule.get("end_hour", 24)
+            day_of_week = datetime.now().weekday()  # 0=Monday, 6=Sunday
+
+            # Determine if weekend (Saturday=5, Sunday=6)
+            is_weekend = day_of_week >= 5
+
+            # Get appropriate schedule based on day of week
+            # Check if using new format (weekday/weekend as dicts)
+            if isinstance(schedule.get("weekday"), dict):
+                if is_weekend and "weekend" in schedule:
+                    day_schedule = schedule["weekend"]
+                elif "weekday" in schedule:
+                    day_schedule = schedule["weekday"]
+                else:
+                    return True  # No schedule defined
+            else:
+                # Legacy format support - use same schedule for all days
+                day_schedule = schedule
+
+            start_hour = day_schedule.get("start_hour", 0)
+            end_hour = day_schedule.get("end_hour", 24)
 
             # Handle overnight schedules (e.g., 22:00 to 06:00)
             if start_hour > end_hour:

@@ -373,54 +373,166 @@ class ChildMinderManager:
         except Exception as e:
             print(f"Error enabling user: {e}")
     
-    def set_user_hours(self, username: str, start_hour: int, end_hour: int):
-        """Set allowed access hours for a user"""
+    def _validate_hours(self, start_hour: int, end_hour: int) -> bool:
+        """Validate hour range for schedule"""
+        if not (0 <= start_hour <= 23):
+            print(f"Error: Start hour must be between 0 and 23, got {start_hour}")
+            return False
+        if not (0 <= end_hour <= 23):
+            print(f"Error: End hour must be between 0 and 23, got {end_hour}")
+            return False
+        if start_hour == end_hour:
+            print(f"Error: Start and end hours cannot be the same")
+            return False
+        return True
+
+    def _load_user_control(self) -> dict:
+        """Load user control state"""
+        defaults = {"disabled_users": {}, "scheduled_disables": {}, "daily_schedules": {}}
+        if self.user_control_path.exists():
+            with open(self.user_control_path, 'r') as f:
+                user_control = json.load(f)
+            # Ensure required keys exist
+            for key, default_value in defaults.items():
+                if key not in user_control:
+                    user_control[key] = default_value
+            return user_control
+        return defaults
+
+    def _save_user_control(self, user_control: dict):
+        """Save user control state and enable user control in config"""
+        self.user_control_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.user_control_path, 'w') as f:
+            json.dump(user_control, f, indent=2)
+
+        # Enable user control in main config
+        config = self.load_config()
+        if "user_control" not in config:
+            config["user_control"] = {}
+        config["user_control"]["enabled"] = True
+        self.save_config(config)
+
+    def _format_hour_range(self, start_hour: int, end_hour: int) -> str:
+        """Format hour range for display"""
+        if start_hour > end_hour:
+            return f"{start_hour:02d}:00 - {end_hour:02d}:00 (overnight)"
+        return f"{start_hour:02d}:00 - {end_hour:02d}:00"
+
+    def _print_schedule(self, schedule: dict, indent: str = ""):
+        """Print schedule in a user-friendly format, handling both old and new formats"""
+        # Check if using new format (weekday/weekend as dicts)
+        if isinstance(schedule.get("weekday"), dict):
+            weekday = schedule["weekday"]
+            weekend = schedule.get("weekend", weekday)
+
+            weekday_str = self._format_hour_range(weekday["start_hour"], weekday["end_hour"])
+            weekend_str = self._format_hour_range(weekend["start_hour"], weekend["end_hour"])
+
+            if weekday == weekend:
+                print(f"{indent}Access Hours: {weekday_str} (all days)")
+            else:
+                print(f"{indent}Access Hours:")
+                print(f"{indent}  Weekday (Mon-Fri): {weekday_str}")
+                print(f"{indent}  Weekend (Sat-Sun): {weekend_str}")
+        else:
+            # Old flat format
+            start_hour = schedule.get("start_hour", 0)
+            end_hour = schedule.get("end_hour", 24)
+            print(f"{indent}Access Hours: {self._format_hour_range(start_hour, end_hour)}")
+
+    def set_weekday_hours(self, username: str, start_hour: int, end_hour: int):
+        """Set allowed weekday (Mon-Fri) access hours for a user"""
         try:
-            # Validate hour range
-            if not (0 <= start_hour <= 23):
-                print(f"Error: Start hour must be between 0 and 23, got {start_hour}")
-                return
-            if not (0 <= end_hour <= 23):
-                print(f"Error: End hour must be between 0 and 23, got {end_hour}")
-                return
-            if start_hour == end_hour:
-                print(f"Error: Start and end hours cannot be the same")
+            if not self._validate_hours(start_hour, end_hour):
                 return
 
-            # Load or create user control state
-            user_control = {"disabled_users": {}, "scheduled_disables": {}, "daily_schedules": {}}
-            if self.user_control_path.exists():
-                with open(self.user_control_path, 'r') as f:
-                    user_control = json.load(f)
+            user_control = self._load_user_control()
 
-            user_control["daily_schedules"][username] = {
+            # Get or create user schedule
+            if username not in user_control["daily_schedules"]:
+                user_control["daily_schedules"][username] = {}
+
+            schedule = user_control["daily_schedules"][username]
+
+            # Migrate old flat format to new format if needed
+            if "start_hour" in schedule and not isinstance(schedule.get("weekday"), dict):
+                old_start = schedule.get("start_hour", 0)
+                old_end = schedule.get("end_hour", 24)
+                schedule = {
+                    "weekday": {"start_hour": old_start, "end_hour": old_end},
+                    "weekend": {"start_hour": old_start, "end_hour": old_end}
+                }
+
+            # Set weekday schedule
+            schedule["weekday"] = {
                 "start_hour": start_hour,
-                "end_hour": end_hour,
-                "weekday": True,
-                "weekend": True
+                "end_hour": end_hour
             }
 
-            # Save state
-            self.user_control_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.user_control_path, 'w') as f:
-                json.dump(user_control, f, indent=2)
+            # Initialize weekend to same as weekday if not set
+            if "weekend" not in schedule:
+                schedule["weekend"] = {
+                    "start_hour": start_hour,
+                    "end_hour": end_hour
+                }
 
-            # Enable user control in main config
-            config = self.load_config()
-            if "user_control" not in config:
-                config["user_control"] = {}
-            config["user_control"]["enabled"] = True
-            self.save_config(config)
+            user_control["daily_schedules"][username] = schedule
+            self._save_user_control(user_control)
 
-            if start_hour > end_hour:
-                # Overnight schedule
-                print(f"Set access hours for {username}: {start_hour}:00 - {end_hour}:00 (overnight)")
-            else:
-                print(f"Set access hours for {username}: {start_hour}:00 - {end_hour}:00")
-            print("User will be automatically logged out outside these hours")
+            print(f"Set weekday access hours for {username}: {self._format_hour_range(start_hour, end_hour)}")
+            print("User will be automatically logged out outside these hours (Mon-Fri)")
 
         except Exception as e:
-            print(f"Error setting user hours: {e}")
+            print(f"Error setting weekday hours: {e}")
+
+    def set_weekend_hours(self, username: str, start_hour: int, end_hour: int):
+        """Set allowed weekend (Sat-Sun) access hours for a user"""
+        try:
+            if not self._validate_hours(start_hour, end_hour):
+                return
+
+            user_control = self._load_user_control()
+
+            # Get or create user schedule
+            if username not in user_control["daily_schedules"]:
+                user_control["daily_schedules"][username] = {}
+
+            schedule = user_control["daily_schedules"][username]
+
+            # Migrate old flat format to new format if needed
+            if "start_hour" in schedule and not isinstance(schedule.get("weekday"), dict):
+                old_start = schedule.get("start_hour", 0)
+                old_end = schedule.get("end_hour", 24)
+                schedule = {
+                    "weekday": {"start_hour": old_start, "end_hour": old_end},
+                    "weekend": {"start_hour": old_start, "end_hour": old_end}
+                }
+
+            # Set weekend schedule
+            schedule["weekend"] = {
+                "start_hour": start_hour,
+                "end_hour": end_hour
+            }
+
+            # Initialize weekday to same as weekend if not set
+            if "weekday" not in schedule:
+                schedule["weekday"] = {
+                    "start_hour": start_hour,
+                    "end_hour": end_hour
+                }
+
+            user_control["daily_schedules"][username] = schedule
+            self._save_user_control(user_control)
+
+            print(f"Set weekend access hours for {username}: {self._format_hour_range(start_hour, end_hour)}")
+            print("User will be automatically logged out outside these hours (Sat-Sun)")
+
+        except Exception as e:
+            print(f"Error setting weekend hours: {e}")
+
+    def set_user_hours(self, username: str, start_hour: int, end_hour: int):
+        """Set allowed access hours for a user (backward-compatible, sets weekday hours)"""
+        self.set_weekday_hours(username, start_hour, end_hour)
     
     def show_user_status(self, username: str = None):
         """Show user account status"""
@@ -456,7 +568,7 @@ class ChildMinderManager:
                 # Check access hours
                 if username in user_control.get("daily_schedules", {}):
                     schedule = user_control["daily_schedules"][username]
-                    print(f"Access Hours: {schedule['start_hour']}:00 - {schedule['end_hour']}:00")
+                    self._print_schedule(schedule)
                 else:
                     print(f"Access Hours: Unrestricted")
             else:
@@ -478,7 +590,8 @@ class ChildMinderManager:
                 if schedules:
                     print("\n=== Users with Access Hours ===")
                     for user, schedule in schedules.items():
-                        print(f"{user}: {schedule['start_hour']}:00 - {schedule['end_hour']}:00")
+                        print(f"\n{user}:")
+                        self._print_schedule(schedule, indent="  ")
                         
         except Exception as e:
             print(f"Error showing user status: {e}")
@@ -557,7 +670,20 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
     enable_user_parser = subparsers.add_parser('enable-user', help='Enable a user account')
     enable_user_parser.add_argument('username', help='Username to enable')
     
-    user_hours_parser = subparsers.add_parser('set-user-hours', help='Set allowed access hours for user')
+    # Weekday hours command
+    weekday_hours_parser = subparsers.add_parser('set-weekday-hours', help='Set weekday access hours (Mon-Fri)')
+    weekday_hours_parser.add_argument('username', help='Username')
+    weekday_hours_parser.add_argument('start', type=int, help='Start hour (0-23)')
+    weekday_hours_parser.add_argument('end', type=int, help='End hour (0-23)')
+
+    # Weekend hours command
+    weekend_hours_parser = subparsers.add_parser('set-weekend-hours', help='Set weekend access hours (Sat-Sun)')
+    weekend_hours_parser.add_argument('username', help='Username')
+    weekend_hours_parser.add_argument('start', type=int, help='Start hour (0-23)')
+    weekend_hours_parser.add_argument('end', type=int, help='End hour (0-23)')
+
+    # Legacy command (alias for weekday)
+    user_hours_parser = subparsers.add_parser('set-user-hours', help='Set access hours (alias for set-weekday-hours)')
     user_hours_parser.add_argument('username', help='Username')
     user_hours_parser.add_argument('start', type=int, help='Start hour (0-23)')
     user_hours_parser.add_argument('end', type=int, help='End hour (0-23)')
@@ -613,6 +739,10 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
         manager.disable_user_account(args.username, args.reason, args.hours)
     elif args.command == 'enable-user':
         manager.enable_user_account(args.username)
+    elif args.command == 'set-weekday-hours':
+        manager.set_weekday_hours(args.username, args.start, args.end)
+    elif args.command == 'set-weekend-hours':
+        manager.set_weekend_hours(args.username, args.start, args.end)
     elif args.command == 'set-user-hours':
         manager.set_user_hours(args.username, args.start, args.end)
     elif args.command == 'user-status':
