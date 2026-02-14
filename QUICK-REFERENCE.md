@@ -87,12 +87,32 @@ sudo cmctl disable-user johnny -t 2 -r "2 hour timeout"  # Auto re-enable
 # Re-enable user
 sudo cmctl enable-user johnny
 
-# Set access hours (e.g., 8 AM to 9 PM)
-sudo cmctl set-user-hours johnny 8 21
-
 # Check user status
 sudo cmctl user-status johnny
 sudo cmctl user-status  # Show all disabled users
+```
+
+### Access Schedules (Weekday/Weekend)
+```bash
+# Set weekday hours (replaces all weekday windows)
+sudo cmctl set-weekday-hours johnny 15 21    # Mon-Fri: 3 PM - 9 PM
+
+# Set weekend hours (replaces all weekend windows)
+sudo cmctl set-weekend-hours johnny 9 22     # Sat-Sun: 9 AM - 10 PM
+
+# Legacy alias (same as set-weekday-hours)
+sudo cmctl set-user-hours johnny 8 21
+
+# Add extra time windows (without replacing existing ones)
+sudo cmctl add-weekday-window johnny 7 8     # Add 7-8 AM weekday window
+sudo cmctl add-weekend-window johnny 12 14   # Add 12-2 PM weekend window
+
+# Remove specific windows
+sudo cmctl remove-weekday-window johnny 7 8
+sudo cmctl remove-weekend-window johnny 12 14
+
+# Overnight schedules (start > end)
+sudo cmctl set-weekend-hours johnny 22 6     # 10 PM - 6 AM
 ```
 
 ### System Control
@@ -122,18 +142,16 @@ sudo cmctl group-limit games 120  # 2 hours total
 sudo cmctl limit firefox 180  # 3 hours
 
 # 5. Set school day hours (3 PM to 8 PM)
-sudo cmctl set-user-hours johnny 15 20
+sudo cmctl set-weekday-hours johnny 15 20
 ```
 
 ### Weekend vs Weekday Rules
 ```bash
-# Weekday (strict)
-sudo cmctl group-limit games 60
-sudo cmctl set-user-hours johnny 15 20
+# Weekday hours (strict)
+sudo cmctl set-weekday-hours johnny 15 20    # 3 PM - 8 PM
 
-# Weekend (relaxed)
-sudo cmctl group-limit games 180
-sudo cmctl set-user-hours johnny 8 22
+# Weekend hours (relaxed)
+sudo cmctl set-weekend-hours johnny 8 22     # 8 AM - 10 PM
 ```
 
 ### Quick Punishments
@@ -253,16 +271,8 @@ sudo passwd -S johnny  # Should show 'L'
 ## Safety Commands
 
 ```bash
-# Complete uninstall
-sudo systemctl stop child-minder
-sudo systemctl disable child-minder
-sudo rm -rf /etc/child-minder
-sudo rm -rf /var/lib/child-minder
-sudo rm -rf /var/log/child-minder
-sudo rm /usr/bin/child-minder.py
-sudo rm /usr/bin/cmctl*
-sudo rm /etc/systemd/system/child-minder.service
-sudo systemctl daemon-reload
+# Complete uninstall (interactive, with optional backup)
+sudo bash uninstall.sh
 
 # Backup configuration
 sudo cp -r /etc/child-minder /etc/child-minder.backup

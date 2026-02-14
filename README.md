@@ -1,95 +1,109 @@
-# Child Minder - Linux Process Monitor and Control System
+# Child Minder
 
-A comprehensive parental control system for Linux that monitors and controls application usage, with features for blocking applications, setting time limits, and logging usage statistics.
+A parental control system for Linux that monitors and controls application usage. Block applications, set daily time limits (per-app or per-group), enforce access schedules with separate weekday/weekend hours, and disable user accounts on demand.
 
 ## Features
 
-- **Process Blocking**: Completely block specified applications from running
-- **Time Limits**: Set daily time limits for individual applications
-- **Group Limits**: Set combined time limits for groups of applications (e.g., all games = 2 hours total)
-- **User Account Control**: Disable/enable user accounts and set access hours
-- **Usage Logging**: Track and log application usage for specified programs
-- **User-Specific Monitoring**: Monitor only specific user accounts
-- **Automatic Warnings**: Warn users before their time runs out
-- **Daily Reset**: Usage counters reset automatically each day
-- **Service Management**: Runs as a system service with automatic startup
-- **Easy Configuration**: JSON-based configuration with management utility
+- Block specified applications from running
+- Set daily time limits for individual applications
+- Set combined time limits for groups of applications (e.g., all games = 2 hours total)
+- Weekday and weekend access schedules with multiple time windows
+- Overnight schedule support (e.g., `22:00-06:00`)
+- Disable/enable user accounts with optional timed re-enable
+- Desktop notifications warning users before limits expire
+- Usage tracking and logging
+- Runs as a systemd service with automatic startup
+- SIGHUP config reload (no restart required)
 
 ## Requirements
 
 - Linux system with systemd
-- Python 3.6 or higher
-- Root/sudo access for installation
+- Python 3.6+
+- Root/sudo access
 - Python package: `psutil`
 
 ## Installation
 
-1. **Download all files** to a directory (e.g., `/tmp/child-minder/`):
-   - `child-minder.py` - Main monitoring script
-   - `config.json` - Configuration file
-   - `child-minder.service` - Systemd service file
-   - `install.sh` - Installation script
-   - `cmctl.py` - Management utility
+### Option 1: Git clone
 
-2. **Make scripts executable**:
-   ```bash
-   chmod +x install.sh child-minder.py cmctl.py
-   ```
+```bash
+git clone <repo-url> /tmp/child-minder
+cd /tmp/child-minder
+sudo bash install.sh
+```
 
-3. **Run the installation script**:
-   ```bash
-   sudo ./install.sh
-   ```
+### Option 2: Download files
 
-4. **Configure the system**:
-   ```bash
-   sudo nano /etc/child-minder/config.json
-   ```
-   Update the configuration with:
-   - Your son's username in `monitored_users`
-   - Applications to block in `blocked_processes`
-   - Time limits in `limited_processes`
-   - Applications to log in `monitored_processes`
+Download all files to a directory, then:
 
-5. **Start the service**:
-   ```bash
-   sudo systemctl start child-minder
-   ```
+```bash
+cd /path/to/child-minder
+sudo bash install.sh
+```
 
-## Configuration
+The installer handles both fresh installs and updates (preserving your existing config). It installs:
 
-The configuration file (`/etc/child-minder/config.json`) contains:
+- `/usr/bin/child-minder.py` — main daemon
+- `/usr/bin/cmctl.py` — management utility
+- `/usr/bin/cmctl` — convenience symlink for `cmctl.py`
+- `/etc/child-minder/config.json` — configuration
+- `/etc/systemd/system/child-minder.service` — systemd unit
 
-### Basic Settings
-- `enabled`: Master on/off switch for monitoring
-- `check_interval`: How often to check processes (seconds)
-- `warning_time`: Single warning time before limit (seconds, default 300 = 5 minutes)
-- `warning_intervals`: Multiple warning times (seconds) - e.g., [1800, 900, 600, 300, 120, 60] for warnings at 30, 15, 10, 5, 2, and 1 minute
-- `usage_log_interval`: How often to log usage summary (seconds)
+## Quick Start
 
-### User Management
-- `monitored_users`: List of usernames to monitor (empty = all users)
+```bash
+# 1. Add your child's username
+sudo cmctl add-user johnny
 
-### Process Control
-- `blocked_processes`: List of process names to block completely
-- `limited_processes`: Dictionary of process names with individual daily time limits (in minutes)
-- `monitored_processes`: List of process names to track usage for
+# 2. Block unwanted apps
+sudo cmctl block discord
 
-### Process Groups (New!)
-- `process_groups`: Define groups of related applications
-  - Example: Group all games together, all browsers together, etc.
-- `group_limits`: Set total daily time limits for entire groups (in minutes)
-  - Example: All games combined get 2 hours, regardless of which game
+# 3. Set time limits
+sudo cmctl limit minecraft 60          # 60 min/day
+sudo cmctl add-to-group games steam
+sudo cmctl add-to-group games roblox
+sudo cmctl group-limit games 120       # 2 hours total for all games
 
-### Group Limits vs Individual Limits
-When both group and individual limits are set:
-- **Both limits are enforced** - whichever is reached first triggers
-- Example: If "games" group has 120 minutes and "minecraft" has 60 minutes:
-  - Playing only Minecraft: limited to 60 minutes
-  - Playing multiple games: all games combined limited to 120 minutes
-  - If 90 minutes spent on Steam, only 30 minutes left for any game in the group
+# 4. Set access hours
+sudo cmctl set-weekday-hours johnny 15 21   # 3 PM - 9 PM on weekdays
+sudo cmctl set-weekend-hours johnny 9 22    # 9 AM - 10 PM on weekends
 
-### Example Configuration
+# 5. Start the service
+sudo systemctl start child-minder
+```
+
+## Configuration Reference
+
+Configuration lives at `/etc/child-minder/config.json`. Changes are picked up on service reload (`systemctl reload child-minder` or `kill -HUP <pid>`).
+
+### Config keys
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `true` | Master on/off switch |
+| `check_interval` | int | `5` | Seconds between process checks |
+| `monitored_users` | list | `[]` | Usernames to monitor (empty = all users) |
+| `blocked_processes` | list | `[]` | Process names to block completely |
+| `limited_processes` | dict | `{}` | Process name → daily limit in minutes |
+| `process_groups` | dict | `{}` | Group name → list of process names |
+| `group_limits` | dict | `{}` | Group name → daily limit in minutes |
+| `monitored_processes` | list | `[]` | Process names to track usage for (logging only) |
+| `warning_time` | int | `300` | Seconds before limit to warn (single warning) |
+| `warning_intervals` | list | — | Multiple warning times in seconds (overrides `warning_time`) |
+| `usage_log_interval` | int | `60` | Seconds between usage summary logs |
+| `user_control` | dict | see below | User account control settings |
+
+### `user_control` sub-keys
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Enable user account control features |
+| `check_interval` | int | `60` | Seconds between user control checks |
+| `auto_disable_on_violations` | bool | `false` | Auto-disable on repeated violations |
+| `violation_threshold` | int | `3` | Violations before auto-disable |
+
+### Example config
+
 ```json
 {
   "enabled": true,
@@ -97,416 +111,244 @@ When both group and individual limits are set:
   "monitored_users": ["johnny"],
   "blocked_processes": ["discord", "telegram"],
   "process_groups": {
-    "games": ["minecraft", "steam", "roblox", "fortnite"],
-    "browsers": ["firefox", "chrome", "chromium", "brave"],
-    "social": ["discord", "telegram", "slack"],
-    "entertainment": ["vlc", "mpv", "spotify", "youtube"]
+    "games": ["minecraft", "steam", "roblox"],
+    "browsers": ["firefox", "chrome", "chromium"]
   },
   "group_limits": {
     "games": 120,
-    "browsers": 180,
-    "entertainment": 90
+    "browsers": 180
   },
   "limited_processes": {
     "minecraft": 60,
     "youtube": 45
   },
-  "monitored_processes": ["firefox", "chrome", "minecraft", "steam"]
-}
-```
-
-## Management Utility (cmctl.py)
-
-The management utility provides easy command-line control:
-
-### View Information
-```bash
-sudo ./cmctl.py config        # Show current configuration
-sudo ./cmctl.py usage         # Show today's usage statistics
-sudo ./cmctl.py status        # Show service status
-sudo ./cmctl.py logs -n 100   # Show last 100 log entries
-sudo ./cmctl.py groups        # List all process groups and limits
-```
-
-### Manage Blocked Processes
-```bash
-sudo ./cmctl.py block discord      # Block Discord
-sudo ./cmctl.py unblock discord    # Unblock Discord
-```
-
-### Manage Individual Time Limits
-```bash
-sudo ./cmctl.py limit minecraft 60    # Limit Minecraft to 60 minutes/day
-sudo ./cmctl.py unlimit minecraft     # Remove time limit
-```
-
-### Manage Process Groups
-```bash
-# Create/modify groups
-sudo ./cmctl.py add-to-group games minecraft       # Add Minecraft to games group
-sudo ./cmctl.py add-to-group games roblox         # Add Roblox to games group
-sudo ./cmctl.py remove-from-group games minecraft  # Remove from group
-
-# Set group limits
-sudo ./cmctl.py group-limit games 120      # All games combined: 2 hours/day
-sudo ./cmctl.py group-limit browsers 180   # All browsers combined: 3 hours/day
-sudo ./cmctl.py group-unlimit games        # Remove group limit
-```
-
-### Manage Users
-```bash
-sudo ./cmctl.py add-user johnny       # Monitor user 'johnny'
-sudo ./cmctl.py remove-user johnny    # Stop monitoring user 'johnny'
-```
-
-### Control Service
-```bash
-sudo ./cmctl.py enable     # Enable monitoring
-sudo ./cmctl.py disable    # Disable monitoring (temporarily)
-sudo ./cmctl.py reset      # Reset daily usage counters
-```
-
-### User Account Control
-```bash
-# Disable user account (immediate logout)
-sudo ./cmctl.py disable-user johnny -r "Breaking rules"
-sudo ./cmctl.py disable-user johnny -t 2 -r "2 hour timeout"  # Auto re-enable after 2 hours
-
-# Re-enable user account
-sudo ./cmctl.py enable-user johnny
-
-# Set allowed access hours (e.g., 8 AM to 9 PM)
-sudo ./cmctl.py set-user-hours johnny 8 21
-
-# Check user status
-sudo ./cmctl.py user-status johnny
-sudo ./cmctl.py user-status         # Show all disabled users
-```
-
-## Service Management
-
-### Basic Commands
-```bash
-sudo systemctl start child-minder    # Start service
-sudo systemctl stop child-minder     # Stop service
-sudo systemctl restart child-minder  # Restart service
-sudo systemctl status child-minder   # Check status
-sudo systemctl enable child-minder   # Enable auto-start at boot
-sudo systemctl disable child-minder  # Disable auto-start
-```
-
-### View Logs
-```bash
-# System logs
-sudo journalctl -u child-minder -f   # Follow live logs
-sudo journalctl -u child-minder --since today
-
-# Application logs
-sudo tail -f /var/log/child-minder/minder.log
-```
-
-## How It Works
-
-1. **Process Monitoring**: The service checks all running processes every 5 seconds
-2. **User Filtering**: Only processes belonging to monitored users are checked
-3. **Blocking**: Blocked processes are immediately terminated when detected
-4. **Time Tracking**: Time-limited processes have their usage tracked throughout the day
-5. **Group Tracking**: Processes in groups count toward both individual and group limits
-6. **Warnings**: Users receive desktop notifications when approaching time limits
-7. **Termination**: Processes are terminated when daily limits are exceeded (either individual or group)
-8. **Logging**: All actions and usage statistics are logged to files
-9. **Daily Reset**: Usage counters reset at midnight for the next day
-
-## User Account Control
-
-The system includes comprehensive user account control features for stronger parental control:
-
-### Disable/Enable User Accounts
-
-Completely disable a user account when needed:
-```bash
-# Disable immediately with reason
-sudo ./cmctl.py disable-user johnny -r "Homework not completed"
-
-# Disable for specific duration (auto re-enable)
-sudo ./cmctl.py disable-user johnny -t 3 -r "3 hour timeout"
-
-# Re-enable manually
-sudo ./cmctl.py enable-user johnny
-```
-
-When an account is disabled:
-- User is immediately logged out
-- Account is locked (cannot log in)
-- All running processes are terminated
-- Attempts to log in show the disable reason
-
-### Set Access Hours
-
-Control when users can access the computer:
-```bash
-# Set allowed hours (24-hour format)
-sudo ./cmctl.py set-user-hours johnny 8 21  # 8 AM to 9 PM
-
-# School days: 3 PM to 9 PM
-sudo ./cmctl.py set-user-hours johnny 15 21
-
-# Weekends: 8 AM to 10 PM
-sudo ./cmctl.py set-user-hours johnny 8 22
-```
-
-Outside allowed hours:
-- User is automatically logged out
-- Account is temporarily disabled
-- Automatically re-enabled when allowed time begins
-
-### User Account Control Examples
-
-#### Example 1: School Night Routine
-```bash
-# Set school night hours (3 PM to 8 PM on weekdays)
-sudo ./cmctl.py set-user-hours johnny 15 20
-
-# If rules are broken, immediate timeout
-sudo ./cmctl.py disable-user johnny -t 1 -r "Broke screen time rules"
-```
-
-#### Example 2: Weekend Punishment
-```bash
-# No computer for the weekend
-sudo ./cmctl.py disable-user johnny -t 48 -r "Grounded from computer"
-```
-
-#### Example 3: Homework First Policy
-```bash
-# Disable until homework is verified
-sudo ./cmctl.py disable-user johnny -r "Complete homework first"
-
-# Parent checks homework, then:
-sudo ./cmctl.py enable-user johnny
-```
-
-#### Example 4: Graduated Consequences
-- First violation: Warning
-- Second violation: 1-hour timeout
-- Third violation: Rest of day disabled
-- Fourth violation: Weekend disabled
-
-### Checking User Status
-
-Monitor account status:
-```bash
-# Check specific user
-sudo ./cmctl.py user-status johnny
-
-# Output:
-# === User Status: johnny ===
-# Status: DISABLED
-#   Disabled at: 2024-01-15T15:30:00
-#   Reason: Breaking rules
-#   Will re-enable at: 2024-01-15T17:30:00
-# Access Hours: 8:00 - 21:00
-
-# Check all disabled users
-sudo ./cmctl.py user-status
-```
-
-### Configuration for User Control
-
-Enable user control in config.json:
-```json
-{
+  "monitored_processes": ["firefox", "minecraft"],
+  "warning_intervals": [1800, 900, 600, 300, 120, 60],
+  "usage_log_interval": 300,
   "user_control": {
     "enabled": true,
-    "check_interval": 60,
-    "auto_disable_on_violations": true,
-    "violation_threshold": 3
+    "check_interval": 60
   }
 }
 ```
 
-### How User Control Works
+### Group limits vs individual limits
 
-1. **Account Locking**: Uses Linux `passwd -l` to lock accounts
-2. **Session Termination**: Kills all user processes and login sessions
-3. **Automatic Enforcement**: Checks every minute for violations
-4. **Access Hours**: Automatically disables/enables based on time
-5. **Logging**: All actions are logged for review
+When both are set, **both are enforced** — whichever is reached first triggers termination. Example: if the "games" group has 120 minutes and "minecraft" has 60 minutes individually, Minecraft is capped at 60 minutes but all games combined are capped at 120.
 
-### Security Notes
+## Management Utility (`cmctl`)
 
-- Only root/sudo can disable/enable accounts
-- Disabled users cannot bypass with alternative login methods
-- Account locking is system-level (affects SSH, console, GUI)
-- Re-enabling requires parent/admin intervention
+All commands require `sudo`. You can use either `cmctl` or `cmctl.py`.
 
-### Parent Tips for User Control
+### View information
 
-1. **Clear Communication**: Explain the rules and consequences
-2. **Gradual Implementation**: Start with warnings before disabling
-3. **Consistent Enforcement**: Apply rules consistently
-4. **Time-Based Strategy**:
-   - School nights: Strict hours (homework time to bedtime)
-   - Weekends: More flexible hours
-   - Holidays: Adjusted schedule
-5. **Quick Timeouts**: Use short disables (30-60 min) for minor issues
-6. **Emergency Override**: Keep admin password secure for emergencies
-
-## Group Limiting Examples
-
-### Example 1: Gaming Limits
-Set up a 2-hour total limit for all games:
 ```bash
-# Define the games group
-sudo ./cmctl.py add-to-group games minecraft
-sudo ./cmctl.py add-to-group games steam
-sudo ./cmctl.py add-to-group games roblox
-sudo ./cmctl.py add-to-group games fortnite
-
-# Set 2-hour group limit
-sudo ./cmctl.py group-limit games 120
-
-# Optional: Set stricter limits for specific games
-sudo ./cmctl.py limit fortnite 30  # Fortnite specifically limited to 30 min
+cmctl config                # Show current configuration
+cmctl usage                 # Show today's usage statistics
+cmctl status                # Show service status
+cmctl groups                # List process groups and limits
+cmctl logs [-n 100]         # Show recent log entries
+cmctl user-status [USER]    # Show user account status (all if no user given)
 ```
 
-Result: User can play any combination of games for 2 hours total. Fortnite specifically can't exceed 30 minutes.
+### Block/unblock processes
 
-### Example 2: Educational vs Entertainment
-Balance educational and entertainment content:
 ```bash
-# Entertainment group (1.5 hours)
-sudo ./cmctl.py add-to-group entertainment youtube
-sudo ./cmctl.py add-to-group entertainment netflix
-sudo ./cmctl.py add-to-group entertainment vlc
-sudo ./cmctl.py group-limit entertainment 90
-
-# Educational group (3 hours)
-sudo ./cmctl.py add-to-group educational khan-academy
-sudo ./cmctl.py add-to-group educational duolingo
-sudo ./cmctl.py group-limit educational 180
+cmctl block discord         # Block Discord
+cmctl unblock discord       # Remove block
 ```
 
-### Example 3: Social Media Control
-Limit all social media to 1 hour combined:
-```bash
-# Create social media group
-sudo ./cmctl.py add-to-group social discord
-sudo ./cmctl.py add-to-group social telegram
-sudo ./cmctl.py add-to-group social slack
-sudo ./cmctl.py add-to-group social whatsapp
+### Individual time limits
 
-# 1 hour total for all social apps
-sudo ./cmctl.py group-limit social 60
+```bash
+cmctl limit minecraft 60    # 60 min/day
+cmctl unlimit minecraft     # Remove limit
+```
+
+### Process groups
+
+```bash
+cmctl add-to-group games minecraft      # Add to group
+cmctl remove-from-group games minecraft # Remove from group
+cmctl group-limit games 120             # Set group limit (minutes)
+cmctl group-unlimit games               # Remove group limit
+```
+
+### User management
+
+```bash
+cmctl add-user johnny       # Monitor this user
+cmctl remove-user johnny    # Stop monitoring
+```
+
+### User account control
+
+```bash
+cmctl disable-user johnny -r "Reason"       # Disable account (immediate logout)
+cmctl disable-user johnny -t 2 -r "Timeout" # Disable for 2 hours (auto re-enable)
+cmctl enable-user johnny                    # Re-enable account
+```
+
+### Access schedules
+
+```bash
+# Set hours (replaces all windows for that day type)
+cmctl set-weekday-hours johnny 15 21        # Mon-Fri: 3 PM - 9 PM
+cmctl set-weekend-hours johnny 9 22         # Sat-Sun: 9 AM - 10 PM
+cmctl set-user-hours johnny 8 21            # Alias for set-weekday-hours
+
+# Multiple time windows
+cmctl add-weekday-window johnny 7 8         # Add morning window (7-8 AM)
+cmctl add-weekend-window johnny 12 14       # Add afternoon window
+cmctl remove-weekday-window johnny 7 8      # Remove a window
+cmctl remove-weekend-window johnny 12 14    # Remove a window
+```
+
+Overnight schedules are supported — use a start hour greater than the end hour (e.g., `22 6` for 10 PM to 6 AM).
+
+### System control
+
+```bash
+cmctl enable                # Enable monitoring
+cmctl disable               # Disable monitoring (temporary)
+cmctl reset                 # Reset daily usage counters
+```
+
+## Access Schedules
+
+Access schedules control when a user can log in. Outside allowed hours, the user is automatically logged out and all their processes are terminated.
+
+### Separate weekday/weekend hours
+
+```bash
+# Strict school-day hours
+sudo cmctl set-weekday-hours johnny 15 20   # 3 PM - 8 PM
+
+# Relaxed weekend hours
+sudo cmctl set-weekend-hours johnny 9 22    # 9 AM - 10 PM
+```
+
+### Multiple time windows
+
+You can define multiple access windows per day. For example, allow morning and afternoon access with a break:
+
+```bash
+# Weekday: 7-8 AM (before school) and 3-9 PM (after school)
+sudo cmctl set-weekday-hours johnny 15 21   # Main window
+sudo cmctl add-weekday-window johnny 7 8    # Additional morning window
+```
+
+### Overnight schedules
+
+For schedules that cross midnight, set the start hour greater than the end hour:
+
+```bash
+# Allow 10 PM to 6 AM (overnight)
+sudo cmctl set-weekend-hours johnny 22 6
+```
+
+## User Account Control
+
+Disable and re-enable user accounts for immediate enforcement. When disabled:
+
+- User is immediately logged out
+- Account is locked at the system level (cannot log in via any method)
+- All running processes are terminated
+
+```bash
+# Disable with reason
+sudo cmctl disable-user johnny -r "Homework not done"
+
+# Disable for a set duration (auto re-enables)
+sudo cmctl disable-user johnny -t 2 -r "2-hour timeout"
+
+# Manually re-enable
+sudo cmctl enable-user johnny
+
+# Check status
+sudo cmctl user-status johnny
+```
+
+User control must be enabled in config (`user_control.enabled: true`). It is automatically enabled when you set access hours via `cmctl`.
+
+## Service Management
+
+```bash
+sudo systemctl start child-minder      # Start
+sudo systemctl stop child-minder       # Stop
+sudo systemctl restart child-minder    # Restart
+sudo systemctl reload child-minder     # Reload config (sends SIGHUP)
+sudo systemctl status child-minder     # Check status
+sudo systemctl enable child-minder     # Enable auto-start at boot
+```
+
+### Logs
+
+```bash
+sudo journalctl -u child-minder -f             # Live system logs
+sudo journalctl -u child-minder --since today   # Today's logs
+sudo tail -f /var/log/child-minder/minder.log   # Application log
 ```
 
 ## File Locations
 
-- **Configuration**: `/etc/child-minder/config.json`
-- **State/Usage Data**: `/var/lib/child-minder/state.json`
-- **Logs**: `/var/log/child-minder/minder.log`
-- **Main Script**: `/usr/bin/child-minder.py`
-- **Service File**: `/etc/systemd/system/child-minder.service`
-
-## Security Notes
-
-- The service runs as root to ensure it can monitor and control all processes
-- Configuration files are only writable by root
-- The service uses systemd security features to limit its capabilities
-- Notifications are sent to user sessions when possible
+| Path | Description |
+|------|-------------|
+| `/etc/child-minder/config.json` | Configuration |
+| `/var/lib/child-minder/state.json` | Usage/state data |
+| `/var/lib/child-minder/user_control.json` | User control state |
+| `/var/log/child-minder/minder.log` | Application log |
+| `/usr/bin/child-minder.py` | Main daemon |
+| `/usr/bin/cmctl.py` | Management utility |
+| `/usr/bin/cmctl` | Symlink to `cmctl.py` |
+| `/etc/systemd/system/child-minder.service` | Systemd unit |
 
 ## Troubleshooting
 
-### Service Won't Start
+### Service won't start
+
 ```bash
-# Check for errors
 sudo journalctl -u child-minder -n 50
-# Verify Python and psutil installation
 python3 -c "import psutil; print('OK')"
 ```
 
-### Processes Not Being Blocked
+### Processes not being blocked
+
 - Verify the username is in `monitored_users`
 - Check process names match (case-insensitive partial match)
 - Ensure service is running: `sudo systemctl status child-minder`
 
-### Time Limits Not Working
-- Check if usage is being tracked: `sudo ./cmctl.py usage`
-- Verify process names in configuration
-- Check logs for any errors
+### Time limits not working
 
-### Notifications Not Showing
-- Desktop notifications require a display server
-- May need to configure for specific desktop environments
-- Check logs for notification errors
+- Check usage: `sudo cmctl usage`
+- Verify process names in config
+- Check logs for errors
+
+### Notifications not showing
+
+- Desktop notifications require a display server and `libnotify`
+- Install: `sudo apt install libnotify-bin dbus-x11` (Debian/Ubuntu)
+
+### Testing
+
+A test script is included for validating the setup:
+
+```bash
+sudo bash test-child-minder.sh
+```
 
 ## Uninstallation
 
-To completely remove the system:
-
 ```bash
-# Stop and disable service
-sudo systemctl stop child-minder
-sudo systemctl disable child-minder
-
-# Remove files
-sudo rm /usr/bin/child-minder.py
-sudo rm /usr/bin/cmctl.py
-sudo rm /etc/systemd/system/child-minder.service
-sudo rm -rf /etc/child-minder
-sudo rm -rf /var/lib/child-minder
-sudo rm -rf /var/log/child-minder
-
-# Reload systemd
-sudo systemctl daemon-reload
+sudo bash uninstall.sh
 ```
 
-## Tips for Parents
+The script stops the service, re-enables any disabled user accounts, removes installed files, and optionally backs up your configuration.
 
-1. **Start Gradually**: Begin with monitoring only, then add limits as needed
-2. **Be Transparent**: Discuss the rules with your child
-3. **Set Reasonable Limits**: Consider homework and legitimate needs
-4. **Review Usage**: Check logs weekly to understand patterns
-5. **Adjust as Needed**: Modify limits based on behavior and age
-6. **Use Warnings**: The 5-minute warning helps kids manage their time
-7. **Weekend Differences**: Consider creating separate weekend configurations
+## See Also
 
-## Advanced Usage
-
-### Multiple Configurations
-You can create different configurations for different situations:
-```bash
-# School days configuration
-sudo cp /etc/child-minder/config.json /etc/child-minder/config-school.json
-
-# Weekend configuration  
-sudo cp /etc/child-minder/config.json /etc/child-minder/config-weekend.json
-
-# Switch configurations
-sudo cp /etc/child-minder/config-weekend.json /etc/child-minder/config.json
-sudo systemctl reload child-minder
-```
-
-### Scheduling Different Rules
-Use cron to automatically switch configurations:
-```bash
-# Add to root's crontab
-sudo crontab -e
-
-# School days (Monday-Friday at 6 AM)
-0 6 * * 1-5 cp /etc/child-minder/config-school.json /etc/child-minder/config.json && systemctl reload child-minder
-
-# Weekends (Saturday at 6 AM)
-0 6 * * 6 cp /etc/child-minder/config-weekend.json /etc/child-minder/config.json && systemctl reload child-minder
-```
-
-## Support
-
-For issues or questions:
-1. Check the logs first: `sudo journalctl -u child-minder -n 100`
-2. Verify configuration: `sudo ./cmctl.py config`
-3. Test with verbose logging by modifying the service file
+- [QUICK-REFERENCE.md](QUICK-REFERENCE.md) — condensed command cheat sheet
 
 ## License
 
-This software is provided as-is for personal use. Feel free to modify for your needs.
+MIT — see [LICENSE](LICENSE) for details.
