@@ -201,7 +201,7 @@ python3 -c "import psutil"
 sudo -u johnny DISPLAY=:0 notify-send "Test" "Message"
 
 # Install notification support
-sudo apt install libnotify-bin dbus-x11
+sudo apt install libnotify-bin
 ```
 
 ### Process Not Being Blocked

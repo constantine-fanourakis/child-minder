@@ -326,8 +326,8 @@ python3 -c "import psutil; print('OK')"
 
 ### Notifications not showing
 
-- Desktop notifications require a display server and `libnotify`
-- Install: `sudo apt install libnotify-bin dbus-x11` (Debian/Ubuntu)
+- Desktop notifications require `libnotify` and a running notification daemon
+- Install: `sudo apt install libnotify-bin` (Debian/Ubuntu)
 
 ### Testing
 

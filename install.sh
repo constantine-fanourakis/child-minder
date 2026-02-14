@@ -61,13 +61,13 @@ pip3 install psutil 2>/dev/null || {
 echo "Installing notification support..."
 if command -v apt-get >/dev/null 2>&1; then
     # Debian/Ubuntu
-    apt-get install -y libnotify-bin pulseaudio-utils dbus-x11 2>/dev/null || true
+    apt-get install -y libnotify-bin pulseaudio-utils 2>/dev/null || true
 elif command -v zypper >/dev/null 2>&1; then
     # openSUSE/SUSE
-    zypper --non-interactive install libnotify-tools pulseaudio-utils dbus-1-x11 2>/dev/null || true
+    zypper --non-interactive install libnotify-tools pulseaudio-utils 2>/dev/null || true
 elif command -v yum >/dev/null 2>&1; then
     # RHEL/CentOS/Fedora
-    yum install -y libnotify pulseaudio-utils dbus-x11 2>/dev/null || true
+    yum install -y libnotify pulseaudio-utils 2>/dev/null || true
 elif command -v pacman >/dev/null 2>&1; then
     # Arch Linux
     pacman -S --noconfirm libnotify pulseaudio dbus 2>/dev/null || true
