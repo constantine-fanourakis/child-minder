@@ -41,7 +41,7 @@ cd /path/to/child-minder
 sudo bash install.sh
 ```
 
-The installer handles both fresh installs and updates (preserving your existing config). It installs:
+The installer handles both fresh installs and updates (preserving your existing config). Tab completion for `cmctl` is installed automatically; open a new shell or run `source /etc/bash_completion.d/cmctl` to activate it. It installs:
 
 - `/usr/bin/child-minder.py` — main daemon
 - `/usr/bin/cmctl.py` — management utility

@@ -106,6 +106,12 @@ chmod +x /usr/bin/cmctl.py
 # Create convenience symlink for cmctl
 ln -sf /usr/bin/cmctl.py /usr/bin/cmctl
 
+# Install bash tab completion
+if [ -d /etc/bash_completion.d ]; then
+    cp cmctl-completion.bash /etc/bash_completion.d/cmctl
+    echo "Bash tab completion installed."
+fi
+
 # Handle configuration file
 if [ ! -f /etc/child-minder/config.json ]; then
     # Fresh install - copy default config

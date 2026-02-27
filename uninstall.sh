@@ -91,6 +91,9 @@ rm -f /usr/bin/child-minder.py
 rm -f /usr/bin/cmctl.py
 rm -f /usr/bin/cmctl
 
+# Remove bash tab completion
+rm -f /etc/bash_completion.d/cmctl
+
 # Ask about removing data files
 echo ""
 echo -e "${YELLOW}Do you want to remove configuration and data files? (y/N)${NC}"
