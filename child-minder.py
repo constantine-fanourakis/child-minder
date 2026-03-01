@@ -818,8 +818,8 @@ class ChildMinder:
             # Reload user control state
             self.user_control_state = self.load_user_control_state()
             
-            # Handle any disabled users
-            for username in self.user_control_state.get("disabled_users", {}):
+            # Handle any disabled users (snapshot keys to avoid mutation during iteration)
+            for username in list(self.user_control_state.get("disabled_users", {})):
                 self.handle_disabled_user(username)
             
             # Check access hours for all monitored users

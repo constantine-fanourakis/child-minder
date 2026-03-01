@@ -268,10 +268,12 @@ sudo passwd -S johnny  # Should show 'L'
   "monitored_processes": ["firefox", "chrome", "minecraft"],
   "warning_time": 300,
   "warning_intervals": [1800, 900, 600, 300, 120, 60],
-  "usage_log_interval": 300,
+  "usage_log_interval": 60,
   "user_control": {
     "enabled": true,
-    "check_interval": 60
+    "check_interval": 60,
+    "auto_disable_on_violations": false,
+    "violation_threshold": 3
   }
 }
 ```

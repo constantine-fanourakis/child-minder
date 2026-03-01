@@ -67,6 +67,8 @@ class ChildMinderManager:
     def add_blocked_process(self, process_name: str):
         """Add a process to the block list"""
         config = self.load_config()
+        if 'blocked_processes' not in config:
+            config['blocked_processes'] = []
         if process_name not in config['blocked_processes']:
             config['blocked_processes'].append(process_name)
             self.save_config(config)
@@ -77,7 +79,7 @@ class ChildMinderManager:
     def remove_blocked_process(self, process_name: str):
         """Remove a process from the block list"""
         config = self.load_config()
-        if process_name in config['blocked_processes']:
+        if process_name in config.get('blocked_processes', []):
             config['blocked_processes'].remove(process_name)
             self.save_config(config)
             print(f"Removed '{process_name}' from blocked processes")
@@ -115,6 +117,9 @@ class ChildMinderManager:
     
     def set_group_limit(self, group_name: str, minutes: int):
         """Set time limit for a group"""
+        if minutes <= 0:
+            print("Error: Minutes must be a positive number")
+            return
         config = self.load_config()
         if 'group_limits' not in config:
             config['group_limits'] = {}
@@ -134,6 +139,9 @@ class ChildMinderManager:
 
     def set_user_daily_limit(self, username: str, minutes: int, day_type: str = 'both'):
         """Set overall daily screen time limit for a user (weekday, weekend, or both)"""
+        if minutes <= 0:
+            print("Error: Minutes must be a positive number")
+            return
         config = self.load_config()
         config.setdefault('user_daily_limits', {})
         entry = config['user_daily_limits'].get(username, {})
@@ -180,6 +188,9 @@ class ChildMinderManager:
     
     def set_time_limit(self, process_name: str, minutes: int):
         """Set time limit for a process"""
+        if minutes <= 0:
+            print("Error: Minutes must be a positive number")
+            return
         config = self.load_config()
         if 'limited_processes' not in config:
             config['limited_processes'] = {}
@@ -212,7 +223,7 @@ class ChildMinderManager:
     def remove_monitored_user(self, username: str):
         """Remove a user from monitoring"""
         config = self.load_config()
-        if username in config['monitored_users']:
+        if username in config.get('monitored_users', []):
             config['monitored_users'].remove(username)
             self.save_config(config)
             print(f"Removed '{username}' from monitored users")
@@ -459,14 +470,18 @@ class ChildMinderManager:
     def _load_user_control(self) -> dict:
         """Load user control state"""
         defaults = {"disabled_users": {}, "scheduled_disables": {}, "daily_schedules": {}}
-        if self.user_control_path.exists():
-            with open(self.user_control_path, 'r') as f:
-                user_control = json.load(f)
-            # Ensure required keys exist
-            for key, default_value in defaults.items():
-                if key not in user_control:
-                    user_control[key] = default_value
-            return user_control
+        try:
+            if self.user_control_path.exists():
+                with open(self.user_control_path, 'r') as f:
+                    user_control = json.load(f)
+                # Ensure required keys exist
+                for key, default_value in defaults.items():
+                    if key not in user_control:
+                        user_control[key] = default_value
+                return user_control
+        except json.JSONDecodeError as e:
+            print(f"Error: Invalid JSON in user control file: {e}")
+            sys.exit(1)
         return defaults
 
     def _save_user_control(self, user_control: dict):
@@ -894,7 +909,7 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
     disable_user_parser = subparsers.add_parser('disable-user', help='Disable a user account')
     disable_user_parser.add_argument('username', help='Username to disable')
     disable_user_parser.add_argument('-r', '--reason', default='Administrative action', help='Reason for disabling')
-    disable_user_parser.add_argument('-t', '--hours', type=int, help='Duration in hours (permanent if not set)')
+    disable_user_parser.add_argument('-t', '--hours', type=float, help='Duration in hours (permanent if not set)')
     
     enable_user_parser = subparsers.add_parser('enable-user', help='Enable a user account')
     enable_user_parser.add_argument('username', help='Username to enable')
