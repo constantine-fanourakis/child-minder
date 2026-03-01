@@ -46,10 +46,14 @@ class ChildMinder:
         
         # Track daily usage
         self.daily_usage: Dict[str, Dict[str, float]] = {}
-        
+
         # Track group usage
         self.group_usage: Dict[str, Dict[str, float]] = {}
-        
+
+        # Track user daily usage (across all monitored/limited processes)
+        self.user_daily_usage: Dict[str, float] = {}   # {username: seconds}
+        self.warned_users: Dict[str, Set[int]] = {}    # {username: set of warning thresholds sent}
+
         # Track which warnings have been sent
         self.warned_processes: Dict[int, Set[int]] = {}  # pid -> set of warning times
         self.warned_groups: Dict[str, Dict[str, Set[int]]] = {}  # group -> user -> warning times
@@ -152,6 +156,7 @@ class ChildMinder:
             "limited_processes": {},
             "process_groups": {},
             "group_limits": {},
+            "user_daily_limits": {},
             "monitored_processes": [],
             "warning_time": 300,
             "usage_log_interval": 60,
@@ -172,6 +177,9 @@ class ChildMinder:
                     # Load group usage if present
                     if "group_usage" in state:
                         self.group_usage = state["group_usage"]
+                    # Load user daily usage if present
+                    if "user_daily_usage" in state:
+                        self.user_daily_usage = state["user_daily_usage"]
                     return state
         except Exception as e:
             self.logger.warning(f"Could not load state: {e}")
@@ -188,6 +196,7 @@ class ChildMinder:
             state = {
                 "daily_usage": self.serialize_usage(),
                 "group_usage": self.group_usage,
+                "user_daily_usage": self.user_daily_usage,
                 "last_reset": self.state.get("last_reset", datetime.now().isoformat())
             }
             # Atomic write: write to temp file then rename
@@ -222,8 +231,10 @@ class ChildMinder:
             self.logger.info("Resetting daily usage counters")
             self.daily_usage = {}
             self.group_usage = {}
+            self.user_daily_usage = {}
             self.warned_processes = {}
             self.warned_groups = {}
+            self.warned_users = {}
             self.state["last_reset"] = datetime.now().isoformat()
             self.save_state()
             
@@ -587,6 +598,57 @@ class ChildMinder:
         """Get current group usage in seconds"""
         return self.group_usage.get(username, {}).get(group_name, 0)
 
+    def get_user_daily_limit(self, username: str) -> Optional[int]:
+        """Get user's daily screen time limit in seconds for today (weekday vs weekend)"""
+        limits = self.config.get("user_daily_limits", {})
+        if username not in limits:
+            return None
+        entry = limits[username]
+        if isinstance(entry, (int, float)):
+            return int(entry) * 60  # backward compat: plain number
+        is_weekend = datetime.now().weekday() >= 5
+        key = "weekend" if is_weekend else "weekday"
+        val = entry.get(key)
+        return val * 60 if val is not None else None
+
+    def get_user_daily_usage(self, username: str) -> float:
+        """Get current user daily usage in seconds"""
+        return self.user_daily_usage.get(username, 0)
+
+    def update_user_daily_usage(self, username: str, seconds: float):
+        """Increment user daily usage"""
+        self.user_daily_usage.setdefault(username, 0)
+        self.user_daily_usage[username] += seconds
+
+    def should_warn_user(self, username: str, remaining_seconds: float) -> Optional[int]:
+        """Check if a daily-limit warning should be sent to a user"""
+        warning_intervals = self.config.get('warning_intervals', [self.config.get('warning_time', 300)])
+        for w in sorted(warning_intervals):
+            if remaining_seconds <= w:
+                self.warned_users.setdefault(username, set())
+                if w not in self.warned_users[username]:
+                    self.warned_users[username].add(w)
+                    return w
+        return None
+
+    def warn_user_daily_limit(self, username: str, remaining_minutes: int):
+        """Send warning to user about their overall daily screen time limit"""
+        try:
+            remaining_minutes = max(0, remaining_minutes)
+            urgency = 'critical' if remaining_minutes <= 5 else 'normal'
+            title = "Daily Screen Time Warning" if remaining_minutes > 1 else "FINAL SCREEN TIME WARNING"
+            message = (f"You have {remaining_minutes} minute{'s' if remaining_minutes != 1 else ''} "
+                       f"of screen time remaining today. All apps will close when time expires.")
+            if remaining_minutes <= 2:
+                message += " SAVE YOUR WORK NOW!"
+            play_sound = remaining_minutes <= 5
+            self.send_notification(username, title, message, urgency, play_sound)
+            if remaining_minutes <= 2:
+                subprocess.run(['wall', f"SCREEN TIME: {message}"], capture_output=True, timeout=2)
+            self.logger.info(f"Warned {username} about daily limit ({remaining_minutes} min remaining)")
+        except Exception as e:
+            self.logger.error(f"Error in user daily limit warning: {e}")
+
     def kill_user_processes(self, username: str):
         """Kill all processes for a user"""
         try:
@@ -767,6 +829,7 @@ class ChildMinder:
                     self.kill_user_processes(username)
         
         # Regular process monitoring
+        active_users: set = set()
         for proc in psutil.process_iter(['pid', 'name', 'username', 'uids']):
             try:
                 # Get process info
@@ -789,7 +852,11 @@ class ChildMinder:
                 
                 # Check which group this process belongs to, if any
                 group_name = self.get_process_group(process_name)
-                
+
+                # Track for user daily limit (only count limited/monitored processes)
+                if (group_name or self.get_process_limit(process_name) or self.is_process_monitored(process_name)):
+                    active_users.add(username)
+
                 # Track whether to terminate due to limits
                 should_terminate = False
                 terminate_reason = ""
@@ -856,14 +923,30 @@ class ChildMinder:
                 continue
             except Exception as e:
                 self.logger.error(f"Error monitoring process: {e}")
-                
+
+        # Check user daily limits
+        for username in active_users:
+            user_limit = self.get_user_daily_limit(username)
+            if user_limit:
+                self.update_user_daily_usage(username, self.config['check_interval'])
+                current = self.get_user_daily_usage(username)
+                if current >= user_limit:
+                    self.logger.warning(
+                        f"User {username} daily screen time limit exceeded ({user_limit/60:.0f} min), killing processes"
+                    )
+                    self.kill_user_processes(username)
+                else:
+                    remaining = user_limit - current
+                    if self.should_warn_user(username, remaining):
+                        self.warn_user_daily_limit(username, int(remaining / 60))
+
     def log_usage_summary(self):
         """Log usage summary periodically"""
-        if not self.daily_usage and not self.group_usage:
+        if not self.daily_usage and not self.group_usage and not self.user_daily_usage:
             return
-            
+
         self.logger.info("=== Usage Summary ===")
-        
+
         # Log individual process usage
         if self.daily_usage:
             self.logger.info("Individual Process Usage:")
@@ -871,7 +954,7 @@ class ChildMinder:
                 for process, seconds in processes.items():
                     minutes = seconds / 60
                     self.logger.info(f"  User: {user}, Process: {process}, Time: {minutes:.1f} minutes")
-        
+
         # Log group usage
         if self.group_usage:
             self.logger.info("Group Usage:")
@@ -884,7 +967,19 @@ class ChildMinder:
                         self.logger.info(f"  User: {user}, Group: {group}, Time: {minutes:.1f} minutes (Remaining: {remaining:.0f} minutes)")
                     else:
                         self.logger.info(f"  User: {user}, Group: {group}, Time: {minutes:.1f} minutes")
-                        
+
+        # Log user daily totals
+        if self.user_daily_usage:
+            self.logger.info("User Daily Screen Time:")
+            for user, seconds in self.user_daily_usage.items():
+                minutes = seconds / 60
+                limit = self.get_user_daily_limit(user)
+                if limit:
+                    remaining = max(0, (limit - seconds) / 60)
+                    self.logger.info(f"  User: {user}, Time: {minutes:.1f} minutes (Remaining: {remaining:.0f} minutes)")
+                else:
+                    self.logger.info(f"  User: {user}, Time: {minutes:.1f} minutes")
+
         self.logger.info("===================")
         
     def reload_config(self):
@@ -901,6 +996,8 @@ class ChildMinder:
             self.deserialize_usage(self.state["daily_usage"])
         if "group_usage" in self.state:
             self.group_usage = self.state["group_usage"]
+        if "user_daily_usage" in self.state:
+            self.user_daily_usage = self.state["user_daily_usage"]
             
         last_summary = time.time()
         last_save = time.time()

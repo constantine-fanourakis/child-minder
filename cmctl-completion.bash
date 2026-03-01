@@ -8,7 +8,8 @@ _cmctl_completions() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     commands="block unblock limit unlimit add-to-group remove-from-group \
-group-limit group-unlimit groups add-user remove-user config usage status \
+group-limit group-unlimit user-limit user-weekday-limit user-weekend-limit \
+user-unlimit groups add-user remove-user config usage status \
 reset logs enable disable disable-user enable-user set-weekday-hours \
 set-weekend-hours set-user-hours add-weekday-window add-weekend-window \
 remove-weekday-window remove-weekend-window user-status"
@@ -16,7 +17,8 @@ remove-weekday-window remove-weekend-window user-status"
     # Commands that take a username as their first argument
     local user_commands="add-user remove-user disable-user enable-user \
 set-weekday-hours set-weekend-hours set-user-hours add-weekday-window \
-add-weekend-window remove-weekday-window remove-weekend-window user-status"
+add-weekend-window remove-weekday-window remove-weekend-window user-status \
+user-limit user-weekday-limit user-weekend-limit user-unlimit"
 
     # Complete subcommand (first argument)
     if [ "$COMP_CWORD" -eq 1 ]; then

@@ -53,6 +53,15 @@ sudo cmctl limit firefox 120       # 2 hours per day
 sudo cmctl unlimit minecraft        # Remove limit
 ```
 
+### Per-User Daily Screen Time
+```bash
+# Set total screen time cap (all monitored/limited apps count toward this)
+sudo cmctl user-limit johnny 120           # 2 hours total, same for weekday & weekend
+sudo cmctl user-weekday-limit johnny 60    # Weekdays: 1 hour total
+sudo cmctl user-weekend-limit johnny 180   # Weekends: 3 hours total
+sudo cmctl user-unlimit johnny             # Remove all daily limits for user
+```
+
 ### Group Management
 ```bash
 # Create/modify groups
@@ -141,7 +150,11 @@ sudo cmctl group-limit games 120  # 2 hours total
 # 4. Set browser limits
 sudo cmctl limit firefox 180  # 3 hours
 
-# 5. Set school day hours (3 PM to 8 PM)
+# 5. Set overall daily screen time caps
+sudo cmctl user-weekday-limit johnny 120  # 2 hours total on school days
+sudo cmctl user-weekend-limit johnny 240  # 4 hours total on weekends
+
+# 6. Set school day hours (3 PM to 8 PM)
 sudo cmctl set-weekday-hours johnny 15 20
 ```
 
@@ -243,6 +256,10 @@ sudo passwd -S johnny  # Should show 'L'
     "games": 120,
     "browsers": 180,
     "social": 60
+  },
+  "user_daily_limits": {
+    "johnny": {"weekday": 60, "weekend": 180},
+    "sarah": {"weekday": 90, "weekend": 120}
   },
   "limited_processes": {
     "minecraft": 60,

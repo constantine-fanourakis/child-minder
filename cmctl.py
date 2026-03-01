@@ -57,6 +57,8 @@ class ChildMinderManager:
                     # Ensure group_usage exists for backward compatibility
                     if 'group_usage' not in state:
                         state['group_usage'] = {}
+                    if 'user_daily_usage' not in state:
+                        state['user_daily_usage'] = {}
                     return state
         except Exception as e:
             print(f"Warning: Could not load state: {e}")
@@ -129,6 +131,34 @@ class ChildMinderManager:
             print(f"Removed time limit for group '{group_name}'")
         else:
             print(f"Group '{group_name}' has no time limit set")
+
+    def set_user_daily_limit(self, username: str, minutes: int, day_type: str = 'both'):
+        """Set overall daily screen time limit for a user (weekday, weekend, or both)"""
+        config = self.load_config()
+        config.setdefault('user_daily_limits', {})
+        entry = config['user_daily_limits'].get(username, {})
+        if isinstance(entry, (int, float)):
+            entry = {"weekday": int(entry), "weekend": int(entry)}
+        if day_type in ('weekday', 'both'):
+            entry['weekday'] = minutes
+        if day_type in ('weekend', 'both'):
+            entry['weekend'] = minutes
+        config['user_daily_limits'][username] = entry
+        self.save_config(config)
+        if day_type == 'both':
+            print(f"Set daily screen time limit for '{username}' to {minutes} minutes (weekday and weekend)")
+        else:
+            print(f"Set {day_type} daily screen time limit for '{username}' to {minutes} minutes")
+
+    def remove_user_daily_limit(self, username: str):
+        """Remove overall daily screen time limit for a user"""
+        config = self.load_config()
+        if username in config.get('user_daily_limits', {}):
+            del config['user_daily_limits'][username]
+            self.save_config(config)
+            print(f"Removed daily screen time limit for '{username}'")
+        else:
+            print(f"'{username}' has no daily screen time limit set")
     
     def list_groups(self):
         """List all process groups and their limits"""
@@ -210,7 +240,24 @@ class ChildMinderManager:
         print(f"\nIndividual Time Limits:")
         for proc, minutes in config.get('limited_processes', {}).items():
             print(f"  - {proc}: {minutes} minutes/day")
-        
+
+        print(f"\nUser Daily Screen Time Limits:")
+        for user, entry in config.get('user_daily_limits', {}).items():
+            if isinstance(entry, (int, float)):
+                print(f"  - {user}: {int(entry)} min/day (weekday and weekend)")
+            else:
+                weekday = entry.get('weekday')
+                weekend = entry.get('weekend')
+                if weekday == weekend:
+                    print(f"  - {user}: {weekday} min/day (weekday and weekend)")
+                else:
+                    parts = []
+                    if weekday is not None:
+                        parts.append(f"weekday: {weekday} min")
+                    if weekend is not None:
+                        parts.append(f"weekend: {weekend} min")
+                    print(f"  - {user}: {', '.join(parts)}")
+
         print(f"\nMonitored Processes (for logging):")
         for proc in config.get('monitored_processes', []):
             print(f"  - {proc}")
@@ -262,7 +309,29 @@ class ChildMinderManager:
                         remaining = max(0, limit - minutes)
                         print(f"      (Limit: {limit} min, Remaining: {remaining:.0f} min)")
         
-        if not daily_usage and not group_usage:
+        # Show user daily screen time
+        user_daily_usage = state.get('user_daily_usage', {})
+        if user_daily_usage:
+            print("\nUser Daily Screen Time:")
+            is_weekend = datetime.now().weekday() >= 5
+            day_type = "weekend" if is_weekend else "weekday"
+            for user, seconds in user_daily_usage.items():
+                minutes = seconds / 60
+                if minutes >= 60:
+                    print(f"  {user}: {minutes/60:.1f} hours")
+                else:
+                    print(f"  {user}: {minutes:.0f} minutes")
+                entry = config.get('user_daily_limits', {}).get(user)
+                if entry is not None:
+                    if isinstance(entry, (int, float)):
+                        limit = int(entry)
+                    else:
+                        limit = entry.get('weekend' if is_weekend else 'weekday')
+                    if limit is not None:
+                        remaining = max(0, limit - minutes)
+                        print(f"    ({day_type} limit: {limit} min, Remaining: {remaining:.0f} min)")
+
+        if not daily_usage and not group_usage and not user_daily_usage:
             print("No usage data available")
                     
     def reset_usage(self):
@@ -270,6 +339,7 @@ class ChildMinderManager:
         state = self.load_state()
         state['daily_usage'] = {}
         state['group_usage'] = {}
+        state['user_daily_usage'] = {}
         state['last_reset'] = datetime.now().isoformat()
         
         try:
@@ -775,6 +845,21 @@ def main():
     group_unlimit_parser = subparsers.add_parser('group-unlimit', help='Remove time limit for a group')
     group_unlimit_parser.add_argument('group', help='Group name')
 
+    user_limit_parser = subparsers.add_parser('user-limit', help='Set overall daily screen time limit for a user (weekday and weekend)')
+    user_limit_parser.add_argument('username', help='Username')
+    user_limit_parser.add_argument('minutes', type=int, help='Daily limit in minutes')
+
+    user_weekday_limit_parser = subparsers.add_parser('user-weekday-limit', help='Set weekday-only daily screen time limit for a user')
+    user_weekday_limit_parser.add_argument('username', help='Username')
+    user_weekday_limit_parser.add_argument('minutes', type=int, help='Weekday daily limit in minutes')
+
+    user_weekend_limit_parser = subparsers.add_parser('user-weekend-limit', help='Set weekend-only daily screen time limit for a user')
+    user_weekend_limit_parser.add_argument('username', help='Username')
+    user_weekend_limit_parser.add_argument('minutes', type=int, help='Weekend daily limit in minutes')
+
+    user_unlimit_parser = subparsers.add_parser('user-unlimit', help='Remove overall daily screen time limit for a user')
+    user_unlimit_parser.add_argument('username', help='Username')
+
     subparsers.add_parser('groups', help='List all process groups')
     
     # User management
@@ -881,6 +966,14 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
         manager.set_group_limit(args.group, args.minutes)
     elif args.command == 'group-unlimit':
         manager.remove_group_limit(args.group)
+    elif args.command == 'user-limit':
+        manager.set_user_daily_limit(args.username, args.minutes, 'both')
+    elif args.command == 'user-weekday-limit':
+        manager.set_user_daily_limit(args.username, args.minutes, 'weekday')
+    elif args.command == 'user-weekend-limit':
+        manager.set_user_daily_limit(args.username, args.minutes, 'weekend')
+    elif args.command == 'user-unlimit':
+        manager.remove_user_daily_limit(args.username)
     elif args.command == 'groups':
         manager.list_groups()
     elif args.command == 'add-user':
