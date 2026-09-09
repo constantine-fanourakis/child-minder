@@ -508,7 +508,7 @@ class ChildMinderManager:
 
     def _load_user_control(self) -> dict:
         """Load user control state"""
-        defaults = {"disabled_users": {}, "scheduled_disables": {}, "daily_schedules": {}}
+        defaults = {"disabled_users": {}, "daily_schedules": {}}
         try:
             if self.user_control_path.exists():
                 with open(self.user_control_path, 'r') as f:
@@ -804,11 +804,8 @@ class ChildMinderManager:
     def show_user_status(self, username: str = None):
         """Show user account status"""
         try:
-            user_control = {"disabled_users": {}, "scheduled_disables": {}, "daily_schedules": {}}
-            if self.user_control_path.exists():
-                with open(self.user_control_path, 'r') as f:
-                    user_control = json.load(f)
-            
+            user_control = self._load_user_control()
+
             if username:
                 # Show specific user
                 print(f"\n=== User Status: {username} ===")

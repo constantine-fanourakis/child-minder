@@ -271,9 +271,7 @@ sudo passwd -S johnny  # Should show 'L'
   "usage_log_interval": 60,
   "user_control": {
     "enabled": true,
-    "check_interval": 60,
-    "auto_disable_on_violations": false,
-    "violation_threshold": 3
+    "check_interval": 60
   }
 }
 ```

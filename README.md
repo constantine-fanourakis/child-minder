@@ -98,9 +98,7 @@ Configuration lives at `/etc/child-minder/config.json`. Changes are picked up on
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `enabled` | bool | `false` | Enable user account control features |
-| `check_interval` | int | `60` | Seconds between user control checks |
-| `auto_disable_on_violations` | bool | `false` | Auto-disable on repeated violations |
-| `violation_threshold` | int | `3` | Violations before auto-disable |
+| `check_interval` | int | `60` | Seconds between account and schedule checks |
 
 ### Example config
 

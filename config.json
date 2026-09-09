@@ -65,8 +65,6 @@
   "user_control": {
     "enabled": false,
     "check_interval": 60,
-    "auto_disable_on_violations": false,
-    "violation_threshold": 3,
     "comment": "User control allows disabling accounts and setting access hours"
   }
 }

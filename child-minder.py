@@ -234,9 +234,7 @@ class ChildMinder:
             "usage_log_interval": 60,
             "user_control": {
                 "enabled": False,
-                "check_interval": 60,
-                "auto_disable_on_violations": False,
-                "violation_threshold": 3
+                "check_interval": 60
             }
         }
 
@@ -679,7 +677,6 @@ class ChildMinder:
 
         return {
             "disabled_users": {},
-            "scheduled_disables": {},
             "daily_schedules": {}
         }
 
