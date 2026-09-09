@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Dict, Set, Optional
 import pwd
 import subprocess
-import shlex
 import re
+import fnmatch
 
 # Default paths
 DEFAULT_CONFIG_PATH = "/etc/child-minder/config.json"
@@ -252,29 +252,44 @@ class ChildMinder:
             return True
         return username in monitored_users
         
-    def is_process_blocked(self, process_name: str) -> bool:
-        """Check if process is in block list with improved matching"""
-        blocked = self.config.get("blocked_processes", [])
-        process_lower = process_name.lower()
-        process_base = os.path.basename(process_name).lower()
-        
-        for blocked_name in blocked:
-            blocked_lower = blocked_name.lower()
-            if blocked_lower in process_lower or blocked_lower in process_base:
-                return True
-        return False
-        
-    def get_process_group(self, process_name: str) -> Optional[str]:
-        """Get the group name for a process, if any"""
-        process_groups = self.config.get("process_groups", {})
-        process_lower = process_name.lower()
-        process_base = os.path.basename(process_name).lower()
-        
-        for group_name, processes in process_groups.items():
-            for proc in processes:
-                if proc.lower() in process_lower or proc.lower() in process_base:
-                    return group_name
+    @staticmethod
+    def pattern_matches(pattern: str, process_name: str) -> bool:
+        """Match a config pattern against a process name.
+
+        Patterns are case-insensitive. A pattern containing any of * ? [ is
+        treated as a shell glob; anything else must match the whole name.
+        Substring matching is deliberately not the default: an entry like "sh"
+        would otherwise match bash, zsh and kernel threads, and these patterns
+        decide what the daemon terminates as root.
+        """
+        name = os.path.basename(process_name).lower()
+        pattern = pattern.lower()
+        if any(c in pattern for c in '*?['):
+            return fnmatch.fnmatchcase(name, pattern)
+        return name == pattern
+
+    def match_pattern(self, patterns, process_name: str) -> Optional[str]:
+        """Return the first pattern from patterns matching process_name, if any"""
+        for pattern in patterns:
+            if self.pattern_matches(pattern, process_name):
+                return pattern
         return None
+
+    def is_process_blocked(self, process_name: str) -> bool:
+        """Check if process is in block list"""
+        return self.match_pattern(self.config.get("blocked_processes", []), process_name) is not None
+
+    def get_process_group(self, process_name: str) -> Optional[str]:
+        """Get the group name for a process, if any.
+
+        A process listed in several groups is attributed to the first group that
+        matches in config order.
+        """
+        for group_name, processes in self.config.get("process_groups", {}).items():
+            if self.match_pattern(processes, process_name):
+                return group_name
+        return None
+
     
     def get_group_limit(self, group_name: str) -> Optional[int]:
         """Get time limit for a group in seconds"""
@@ -367,28 +382,15 @@ class ChildMinder:
     
     def get_process_limit(self, process_name: str) -> Optional[int]:
         """Get time limit for process in seconds"""
-        limited = self.config.get("limited_processes", {})
-        process_lower = process_name.lower()
-        process_base = os.path.basename(process_name).lower()
-        
-        for limited_name, limit_minutes in limited.items():
-            if limited_name.lower() in process_lower or limited_name.lower() in process_base:
+        for limited_name, limit_minutes in self.config.get("limited_processes", {}).items():
+            if self.pattern_matches(limited_name, process_name):
                 return limit_minutes * 60  # Convert to seconds
         return None
-        
+
     def is_process_monitored(self, process_name: str) -> bool:
         """Check if process should be logged"""
-        monitored = self.config.get("monitored_processes", [])
-        if not monitored:  # If empty, don't log anything
-            return False
-        
-        process_lower = process_name.lower()
-        process_base = os.path.basename(process_name).lower()
-        
-        for mon_name in monitored:
-            if mon_name.lower() in process_lower or mon_name.lower() in process_base:
-                return True
-        return False
+        return self.match_pattern(self.config.get("monitored_processes", []), process_name) is not None
+
         
     def update_usage(self, username: str, process_name: str, seconds: float):
         """Update usage statistics"""
