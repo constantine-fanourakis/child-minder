@@ -10,6 +10,7 @@ import time
 import json
 import signal
 import logging
+import logging.handlers
 import argparse
 import psutil
 from datetime import datetime
@@ -24,6 +25,9 @@ import fnmatch
 DEFAULT_CONFIG_PATH = "/etc/child-minder/config.json"
 DEFAULT_STATE_PATH = "/var/lib/child-minder/state.json"
 DEFAULT_LOG_PATH = "/var/log/child-minder/minder.log"
+
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
 
 # Copy of the last config that parsed, kept beside the state file and used when
 # the live config becomes unreadable
@@ -82,14 +86,19 @@ class ChildMinder:
         signal.signal(signal.SIGHUP, self.reload_handler)
         
     def setup_logging(self):
-        """Setup logging configuration"""
+        """Setup logging configuration.
+
+        Rotates in process because the summary log grows continuously and the
+        package ships no logrotate dependency. Output goes to the file only;
+        systemd captures stderr into the journal, which would otherwise hold a
+        second copy of every line.
+        """
+        handler = logging.handlers.RotatingFileHandler(
+            self.log_path, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT)
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(self.log_path),
-                logging.StreamHandler()
-            ]
+            handlers=[handler]
         )
         self.logger = logging.getLogger(__name__)
         

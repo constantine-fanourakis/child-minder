@@ -283,7 +283,8 @@ sudo passwd -S johnny  # Should show 'L'
 - **Config**: `/etc/child-minder/config.json`
 - **State**: `/var/lib/child-minder/state.json`
 - **User Control**: `/var/lib/child-minder/user_control.json`
-- **Logs**: `/var/log/child-minder/minder.log`
+- **Logs**: `/var/log/child-minder/minder.log` (rotates at 5 MB, 5 kept)
+- **Last good config**: `/var/lib/child-minder/config.last-good.json`
 - **Service**: `/etc/systemd/system/child-minder.service`
 - **Scripts**: `/usr/bin/child-minder.py`, `/usr/bin/cmctl.py`
 
