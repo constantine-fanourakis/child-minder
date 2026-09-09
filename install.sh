@@ -40,22 +40,31 @@ if ! command -v systemctl &> /dev/null; then
 fi
 
 # Install required Python packages
+# The distribution package is preferred: installing psutil with pip as root
+# shadows the packaged copy, and fails outright on PEP 668 systems.
 echo "Installing required Python packages..."
-pip3 install psutil 2>/dev/null || {
-    echo "Failed to install with pip3, trying with system package manager..."
-    if command -v apt-get >/dev/null 2>&1; then
-        apt-get update && apt-get install -y python3-psutil
-    elif command -v zypper >/dev/null 2>&1; then
-        zypper --non-interactive install python3-psutil
-    elif command -v yum >/dev/null 2>&1; then
-        yum install -y python3-psutil
-    elif command -v pacman >/dev/null 2>&1; then
-        pacman -S --noconfirm python3-psutil
-    else
-        echo "Error: Could not install psutil. Please install manually with: pip3 install psutil"
-        exit 1
-    fi
-}
+if python3 -c "import psutil" 2>/dev/null; then
+    echo "psutil already available."
+elif command -v apt-get >/dev/null 2>&1; then
+    apt-get update && apt-get install -y python3-psutil
+elif command -v zypper >/dev/null 2>&1; then
+    zypper --non-interactive install python3-psutil
+elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y python3-psutil
+elif command -v yum >/dev/null 2>&1; then
+    yum install -y python3-psutil
+elif command -v pacman >/dev/null 2>&1; then
+    pacman -S --noconfirm python-psutil
+else
+    echo "Error: Could not install psutil with a system package manager."
+    echo "Please install it manually, for example: pip3 install psutil"
+    exit 1
+fi
+
+if ! python3 -c "import psutil" 2>/dev/null; then
+    echo "Error: psutil is still not importable after installation"
+    exit 1
+fi
 
 # Install notification support
 echo "Installing notification support..."
@@ -130,9 +139,11 @@ else
     echo "New default config saved as /etc/child-minder/config.json.new for reference."
 fi
 
-# Set proper permissions
-chmod 755 /var/lib/child-minder
-chmod 750 /var/log/child-minder
+# Usage data records what the monitored user has been running, so neither
+# directory is readable by anyone but root.
+chmod 700 /var/lib/child-minder
+chmod 700 /var/log/child-minder
+chmod 600 /var/lib/child-minder/* 2>/dev/null || true
 
 # Install systemd service
 echo "Installing systemd service..."
