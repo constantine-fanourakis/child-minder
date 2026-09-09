@@ -393,26 +393,31 @@ class ChildMinderManager:
         print(f"Monitoring {status}")
     
     def disable_user_account(self, username: str, reason: str = "Administrative action",
-                            hours: Optional[int] = None):
+                            hours: Optional[float] = None):
         """Disable a user account"""
         try:
-            # Lock the account
-            result = subprocess.run(['sudo', 'passwd', '-l', username], 
-                                  capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"Error: Failed to disable account: {result.stderr}")
+            try:
+                pwd.getpwnam(username)
+            except KeyError:
+                print(f"Error: User {username} does not exist")
                 return
-            
-            # Update user control state
-            user_control = {"disabled_users": {}, "scheduled_disables": {}, "daily_schedules": {}}
-            if self.user_control_path.exists():
-                with open(self.user_control_path, 'r') as f:
-                    user_control = json.load(f)
-            
+
+            # Expiring the account is what blocks every login path; a password
+            # lock alone leaves SSH keys and passwordless display manager
+            # sessions working.
+            result = subprocess.run(['usermod', '--expiredate', '1', username],
+                                    capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Error: Failed to disable account: {result.stderr.strip()}")
+                return
+            subprocess.run(['passwd', '-l', username], capture_output=True, text=True)
+
+            user_control = self._load_user_control()
+
             disable_info = {
                 "disabled_at": datetime.now().isoformat(),
                 "reason": reason,
-                "disabled_by": subprocess.run(['whoami'], capture_output=True, text=True).stdout.strip()
+                "disabled_by": os.environ.get("SUDO_USER") or pwd.getpwuid(os.geteuid()).pw_name
             }
             
             if hours:
@@ -423,15 +428,11 @@ class ChildMinderManager:
                 print(f"User {username} disabled until manually re-enabled")
             
             user_control["disabled_users"][username] = disable_info
-            
-            # Save state
-            self.user_control_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.user_control_path, 'w') as f:
-                json.dump(user_control, f, indent=2)
-            
-            # Kill user sessions
-            subprocess.run(['sudo', 'pkill', '-u', username], check=False)
-            subprocess.run(['sudo', 'loginctl', 'terminate-user', username], check=False)
+            self._save_user_control(user_control)
+
+            subprocess.run(['loginctl', 'terminate-user', username], check=False,
+                           capture_output=True)
+            subprocess.run(['pkill', '-u', username], check=False, capture_output=True)
             
             print(f"Account disabled and sessions terminated for: {username}")
             print(f"Reason: {reason}")
@@ -442,24 +443,23 @@ class ChildMinderManager:
     def enable_user_account(self, username: str):
         """Enable a user account"""
         try:
-            # Unlock the account
-            result = subprocess.run(['sudo', 'passwd', '-u', username], 
-                                  capture_output=True, text=True)
+            result = subprocess.run(['usermod', '--expiredate', '', username],
+                                    capture_output=True, text=True)
             if result.returncode != 0:
-                print(f"Error: Failed to enable account: {result.stderr}")
+                print(f"Error: Failed to enable account: {result.stderr.strip()}")
                 return
-            
-            # Update user control state
-            if self.user_control_path.exists():
-                with open(self.user_control_path, 'r') as f:
-                    user_control = json.load(f)
-                
-                if username in user_control.get("disabled_users", {}):
-                    del user_control["disabled_users"][username]
-                    
-                    with open(self.user_control_path, 'w') as f:
-                        json.dump(user_control, f, indent=2)
-            
+
+            # Best effort: passwd -u refuses to unlock an account that would be
+            # left passwordless, which does not stop the account from working.
+            unlock = subprocess.run(['passwd', '-u', username], capture_output=True, text=True)
+            if unlock.returncode != 0:
+                print(f"Note: password stayed locked ({unlock.stderr.strip()})")
+
+            user_control = self._load_user_control()
+            if username in user_control.get("disabled_users", {}):
+                del user_control["disabled_users"][username]
+                self._save_user_control(user_control)
+
             print(f"User account enabled: {username}")
             
         except Exception as e:

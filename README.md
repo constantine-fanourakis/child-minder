@@ -252,7 +252,8 @@ sudo cmctl set-weekend-hours johnny 22 6
 Disable and re-enable user accounts for immediate enforcement. When disabled:
 
 - User is immediately logged out
-- Account is locked at the system level (cannot log in via any method)
+- The account is expired and the password locked, blocking every login path
+  including SSH keys and passwordless display manager sessions
 - All running processes are terminated
 
 ```bash

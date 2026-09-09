@@ -15,11 +15,16 @@ StandardOutput=journal
 StandardError=journal
 
 # Security settings
+# PrivateTmp hides /tmp/.X11-unix from helpers launched for a user, so anything
+# started from here must reach the desktop over the session bus in /run/user,
+# not over an X11 socket.
 PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/lib/child-minder /var/log/child-minder /etc/child-minder
+# /etc is writable because re-enabling a timed account disable runs usermod,
+# which rewrites the shadow database and takes lock files alongside it.
+ReadWritePaths=/var/lib/child-minder /var/log/child-minder /etc
 
 [Install]
 WantedBy=multi-user.target

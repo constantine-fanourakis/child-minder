@@ -32,6 +32,7 @@ LOG_BACKUP_COUNT = 5
 # How long a resolved DISPLAY stays usable before it is looked up again
 DISPLAY_CACHE_TTL = 300
 NOTIFY_TIMEOUT = 5
+COMMAND_TIMEOUT = 10
 
 SOUND_FILES = [
     '/usr/share/sounds/freedesktop/stereo/dialog-warning.oga',
@@ -770,17 +771,34 @@ class ChildMinder:
             self.logger.error(f"Error handling disabled user {username}: {e}")
             return False
 
+    def run_command(self, argv: list, check: bool = True):
+        """Run a helper command as root, returning the completed process or None.
+
+        The daemon already runs as root, so helpers are invoked directly; going
+        through sudo adds a PATH and sudoers failure surface and strips the
+        environment that notification helpers depend on.
+        """
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=COMMAND_TIMEOUT)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            self.logger.error(f"Command {argv[0]} failed: {e}")
+            return None
+        if check and result.returncode != 0:
+            self.logger.error(
+                f"Command {' '.join(argv)} failed ({result.returncode}): {result.stderr.strip()}")
+        return result
+
     def enable_user_account(self, username: str):
         """Re-enable a disabled user account"""
         try:
-            # Unlock the account
-            result = subprocess.run(['sudo', 'passwd', '-u', username],
-                                  capture_output=True, text=True)
-            if result.returncode != 0:
-                self.logger.error(f"Failed to unlock account {username}: {result.stderr}")
+            # Clearing the expiry is what actually restores login; passwd -u is
+            # best effort because it refuses to unlock a passwordless account.
+            result = self.run_command(['usermod', '--expiredate', '', username])
+            if result is None or result.returncode != 0:
+                self.logger.error(f"Failed to clear account expiry for {username}, still disabled")
                 return
+            self.run_command(['passwd', '-u', username], check=False)
 
-            # Remove from disabled users in state
             if username in self.user_control_state.get("disabled_users", {}):
                 del self.user_control_state["disabled_users"][username]
                 self.save_user_control_state()

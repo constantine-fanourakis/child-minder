@@ -69,14 +69,18 @@ if [ -f /var/lib/child-minder/user_control.json ]; then
     echo "Re-enabling any disabled user accounts..."
     python3 -c "
 import json
-import subprocess
 import os
-if os.path.exists('/var/lib/child-minder/user_control.json'):
-    with open('/var/lib/child-minder/user_control.json', 'r') as f:
+import subprocess
+path = '/var/lib/child-minder/user_control.json'
+if os.path.exists(path):
+    with open(path, 'r') as f:
         data = json.load(f)
-        for username in data.get('disabled_users', {}).keys():
-            print(f'Re-enabling user: {username}')
-            subprocess.run(['passwd', '-u', username], capture_output=True)
+    for username in data.get('disabled_users', {}):
+        print(f'Re-enabling user: {username}')
+        # Clearing the expiry is what restores login; passwd -u is best effort
+        # because it refuses to leave an account passwordless.
+        subprocess.run(['usermod', '--expiredate', '', username], capture_output=True)
+        subprocess.run(['passwd', '-u', username], capture_output=True)
 " 2>/dev/null || true
 fi
 
