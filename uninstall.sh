@@ -33,23 +33,23 @@ echo ""
 echo "Do you want to backup the configuration first? (Y/n)"
 read -r backup_response
 if [[ ! "$backup_response" =~ ^[Nn]$ ]]; then
-    BACKUP_DIR="/tmp/child-minder-backup-$(date +%Y%m%d-%H%M%S)"
+    BACKUP_DIR="/var/backups/child-minder-$(date +%Y%m%d-%H%M%S)"
     echo "Creating backup in $BACKUP_DIR..."
     mkdir -p "$BACKUP_DIR"
+    chmod 700 "$BACKUP_DIR"
 
-    # Backup configuration
+    # Each source tree is named child-minder, so they are kept in separate
+    # subdirectories rather than being merged into one.
     if [ -d /etc/child-minder ]; then
-        cp -r /etc/child-minder "$BACKUP_DIR/"
+        cp -r /etc/child-minder "$BACKUP_DIR/etc"
     fi
 
-    # Backup state files
     if [ -d /var/lib/child-minder ]; then
-        cp -r /var/lib/child-minder "$BACKUP_DIR/"
+        cp -r /var/lib/child-minder "$BACKUP_DIR/var-lib"
     fi
 
-    # Backup logs
     if [ -d /var/log/child-minder ]; then
-        cp -r /var/log/child-minder "$BACKUP_DIR/"
+        cp -r /var/log/child-minder "$BACKUP_DIR/var-log"
     fi
 
     echo -e "${GREEN}Backup created at: $BACKUP_DIR${NC}"
@@ -119,8 +119,8 @@ if [ -n "$BACKUP_DIR" ]; then
     echo ""
     echo "Your backup is saved at: $BACKUP_DIR"
     echo "To restore configuration later:"
-    echo "  sudo cp -r $BACKUP_DIR/child-minder /etc/"
-    echo "  sudo cp -r $BACKUP_DIR/child-minder /var/lib/"
+    echo "  sudo cp -r $BACKUP_DIR/etc /etc/child-minder"
+    echo "  sudo cp -r $BACKUP_DIR/var-lib /var/lib/child-minder"
 fi
 
 echo ""
