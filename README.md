@@ -321,8 +321,22 @@ python3 -c "import psutil; print('OK')"
 ### Time limits not working
 
 - Check usage: `sudo cmctl usage`
-- Verify process names in config
+- Verify the patterns in config match the real process names
 - Check logs for errors
+
+### Configuration changes have no effect
+
+A configuration file that does not parse is rejected and the service keeps
+running on the previous one, logging the error. Check with:
+
+```bash
+python3 -m json.tool /etc/child-minder/config.json
+sudo journalctl -u child-minder -n 20
+```
+
+The last configuration that parsed is kept at
+`/var/lib/child-minder/config.last-good.json` and is loaded automatically if the
+live file is unreadable at startup.
 
 ### Notifications not showing
 

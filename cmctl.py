@@ -10,12 +10,25 @@ import argparse
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Optional
+import os
 import subprocess
 import pwd
 
 CONFIG_PATH = "/etc/child-minder/config.json"
 STATE_PATH = "/var/lib/child-minder/state.json"
 LOG_PATH = "/var/log/child-minder/minder.log"
+
+SERVICE = "child-minder"
+
+
+def atomic_write_json(path: Path, data: dict):
+    """Write JSON to path atomically, so the daemon never reads a partial file"""
+    temp_file = path.with_name(path.name + '.tmp')
+    with open(temp_file, 'w') as f:
+        json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    temp_file.replace(path)
 
 class ChildMinderManager:
     def __init__(self):
@@ -37,13 +50,11 @@ class ChildMinderManager:
             sys.exit(1)
             
     def save_config(self, config: dict):
-        """Save configuration"""
+        """Save configuration and ask the running service to pick it up"""
         try:
-            with open(self.config_path, 'w') as f:
-                json.dump(config, f, indent=2)
+            atomic_write_json(self.config_path, config)
             print("Configuration saved successfully")
-            # Reload service
-            subprocess.run(['systemctl', 'reload', 'child-minder'], check=False)
+            subprocess.run(['systemctl', 'reload', SERVICE], check=False)
         except Exception as e:
             print(f"Error saving config: {e}")
             sys.exit(1)
@@ -487,8 +498,7 @@ class ChildMinderManager:
     def _save_user_control(self, user_control: dict):
         """Save user control state and enable user control in config"""
         self.user_control_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.user_control_path, 'w') as f:
-            json.dump(user_control, f, indent=2)
+        atomic_write_json(self.user_control_path, user_control)
 
         # Enable user control in main config
         config = self.load_config()

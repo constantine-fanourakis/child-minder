@@ -25,6 +25,15 @@ DEFAULT_CONFIG_PATH = "/etc/child-minder/config.json"
 DEFAULT_STATE_PATH = "/var/lib/child-minder/state.json"
 DEFAULT_LOG_PATH = "/var/log/child-minder/minder.log"
 
+# Copy of the last config that parsed, kept beside the state file and used when
+# the live config becomes unreadable
+LAST_GOOD_CONFIG_NAME = "config.last-good.json"
+
+
+class ConfigError(Exception):
+    """Raised when a configuration file cannot be read or parsed"""
+
+
 class ChildMinder:
     def __init__(self, config_path: str, state_path: str, log_path: str):
         self.config_path = Path(config_path)
@@ -34,6 +43,8 @@ class ChildMinder:
         # Ensure directories exist
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self.last_good_config_path = self.state_path.parent / LAST_GOOD_CONFIG_NAME
         
         # Setup logging
         self.setup_logging()
@@ -94,20 +105,49 @@ class ChildMinder:
         self.logger.info("Received SIGHUP, reloading configuration...")
         self.reload_config()
         
-    def load_config(self) -> dict:
-        """Load configuration from JSON file"""
+    def read_config_file(self, path: Path) -> dict:
+        """Read and validate one config file, raising ConfigError if unusable"""
         try:
-            with open(self.config_path, 'r') as f:
-                config = json.load(f)
-                self.logger.info("Configuration loaded successfully")
-                return self.validate_config(config)
+            with open(path, 'r') as f:
+                return self.validate_config(json.load(f))
         except FileNotFoundError:
-            self.logger.error(f"Config file not found at {self.config_path}")
-            # Return default configuration
-            return self.get_default_config()
+            raise ConfigError(f"Config file not found at {path}")
         except json.JSONDecodeError as e:
-            self.logger.error(f"Error parsing config file: {e}")
-            sys.exit(1)
+            raise ConfigError(f"Invalid JSON in {path}: {e}")
+        except OSError as e:
+            raise ConfigError(f"Could not read {path}: {e}")
+
+    def load_config(self) -> dict:
+        """Load configuration, falling back to the last copy that parsed.
+
+        Enforcement must not stop because of a typo in a hand-edited file: an
+        unreadable config with no usable fallback would otherwise leave the
+        service in a restart loop with every limit silently unenforced.
+        """
+        try:
+            config = self.read_config_file(self.config_path)
+        except ConfigError as e:
+            self.logger.error(str(e))
+            try:
+                config = self.read_config_file(self.last_good_config_path)
+            except ConfigError:
+                self.logger.critical(
+                    "No usable configuration available, monitoring cannot start")
+                raise SystemExit(1)
+            self.logger.warning(
+                f"Falling back to last known good configuration from {self.last_good_config_path}")
+            return config
+
+        self.logger.info("Configuration loaded successfully")
+        self.save_last_good_config(config)
+        return config
+
+    def save_last_good_config(self, config: dict):
+        """Keep a copy of a configuration that parsed cleanly"""
+        try:
+            self.atomic_write_json(self.last_good_config_path, config)
+        except OSError as e:
+            self.logger.warning(f"Could not save last known good config: {e}")
 
     def validate_config(self, config: dict) -> dict:
         """Validate and fill in missing config keys with defaults"""
@@ -116,7 +156,6 @@ class ChildMinder:
         # Ensure all required keys exist
         for key, default_value in defaults.items():
             if key not in config:
-                self.logger.warning(f"Config missing '{key}', using default: {default_value}")
                 config[key] = default_value
             elif isinstance(default_value, dict) and isinstance(config[key], dict):
                 # Recursively fill in nested dicts
@@ -133,20 +172,13 @@ class ChildMinder:
             self.logger.warning("Invalid min_uid, using default: 1000")
             config['min_uid'] = 1000
 
-        if not isinstance(config.get('monitored_users'), list):
-            config['monitored_users'] = []
-
-        if not isinstance(config.get('blocked_processes'), list):
-            config['blocked_processes'] = []
-
-        if not isinstance(config.get('limited_processes'), dict):
-            config['limited_processes'] = {}
-
-        if not isinstance(config.get('process_groups'), dict):
-            config['process_groups'] = {}
-
-        if not isinstance(config.get('group_limits'), dict):
-            config['group_limits'] = {}
+        for key, expected in (('monitored_users', list), ('blocked_processes', list),
+                              ('monitored_processes', list), ('limited_processes', dict),
+                              ('process_groups', dict), ('group_limits', dict),
+                              ('user_daily_limits', dict)):
+            if not isinstance(config.get(key), expected):
+                self.logger.warning(f"Invalid '{key}', using default")
+                config[key] = expected()
 
         return config
 
@@ -195,20 +227,25 @@ class ChildMinder:
             "last_reset": datetime.now().isoformat()
         }
         
+    @staticmethod
+    def atomic_write_json(path: Path, data: dict):
+        """Write JSON to path atomically, so a reader never sees a partial file"""
+        temp_file = path.with_name(path.name + '.tmp')
+        with open(temp_file, 'w') as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        temp_file.replace(path)
+
     def save_state(self):
-        """Save current state to file using atomic write"""
+        """Save current state to file"""
         try:
-            state = {
+            self.atomic_write_json(self.state_path, {
                 "daily_usage": self.serialize_usage(),
                 "group_usage": self.group_usage,
                 "user_daily_usage": self.user_daily_usage,
                 "last_reset": self.state.get("last_reset", datetime.now().isoformat())
-            }
-            # Atomic write: write to temp file then rename
-            temp_file = self.state_path.with_suffix('.tmp')
-            with open(temp_file, 'w') as f:
-                json.dump(state, f, indent=2)
-            temp_file.rename(self.state_path)
+            })
         except Exception as e:
             self.logger.error(f"Error saving state: {e}")
             
@@ -742,11 +779,7 @@ class ChildMinder:
         """Save the user control state to file"""
         try:
             self.user_control_file.parent.mkdir(parents=True, exist_ok=True)
-            # Atomic write: write to temp file then rename
-            temp_file = self.user_control_file.with_suffix('.tmp')
-            with open(temp_file, 'w') as f:
-                json.dump(self.user_control_state, f, indent=2)
-            temp_file.rename(self.user_control_file)
+            self.atomic_write_json(self.user_control_file, self.user_control_state)
         except Exception as e:
             self.logger.error(f"Error saving user control state: {e}")
 
@@ -1006,9 +1039,16 @@ class ChildMinder:
         self.logger.info("===================")
         
     def reload_config(self):
-        """Reload configuration from file"""
+        """Reload configuration, keeping the running config if the new one is bad"""
         self.logger.info("Reloading configuration...")
-        self.config = self.load_config()
+        try:
+            config = self.read_config_file(self.config_path)
+        except ConfigError as e:
+            self.logger.error(f"{e}; keeping the configuration already in use")
+            return
+        self.config = config
+        self.save_last_good_config(config)
+        self.logger.info("Configuration reloaded successfully")
         
     def run(self):
         """Main monitoring loop"""
