@@ -15,7 +15,7 @@ import argparse
 import psutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, Tuple
 import pwd
 import subprocess
 import re
@@ -28,6 +28,16 @@ DEFAULT_LOG_PATH = "/var/log/child-minder/minder.log"
 
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
+
+# How long a resolved DISPLAY stays usable before it is looked up again
+DISPLAY_CACHE_TTL = 300
+NOTIFY_TIMEOUT = 5
+
+SOUND_FILES = [
+    '/usr/share/sounds/freedesktop/stereo/dialog-warning.oga',
+    '/usr/share/sounds/ubuntu/stereo/dialog-warning.ogg',
+    '/usr/share/sounds/gnome/default/alerts/glass.ogg',
+]
 
 # Copy of the last config that parsed, kept beside the state file and used when
 # the live config becomes unreadable
@@ -68,6 +78,8 @@ class ChildMinder:
         # Track user daily usage (across all monitored/limited processes)
         self.user_daily_usage: Dict[str, float] = {}   # {username: seconds}
         self.warned_users: Dict[str, Set[int]] = {}    # {username: set of warning thresholds sent}
+
+        self.display_cache: Dict[str, Tuple[str, float]] = {}
 
         # Track which warnings have been sent
         self.warned_processes: Dict[int, Set[int]] = {}  # pid -> set of warning times
@@ -547,20 +559,32 @@ class ChildMinder:
             self.logger.error(f"Error in warning system: {e}")
     
     def get_user_display(self, username: str) -> str:
-        """Get the user's display variable"""
+        """Get the user's X display, caching the result for DISPLAY_CACHE_TTL seconds.
+
+        Finding it means reading /proc/<pid>/environ for the user's processes,
+        which is too expensive to repeat for every notification.
+        """
+        cached = self.display_cache.get(username)
+        if cached and time.monotonic() - cached[1] < DISPLAY_CACHE_TTL:
+            return cached[0]
+
+        display = ':0'
         try:
-            # Try to find display from user's processes
-            for p in psutil.process_iter(['username', 'environ']):
+            for proc in psutil.process_iter(['username', 'environ']):
                 try:
-                    if p.username() == username:
-                        env = p.environ()
-                        if 'DISPLAY' in env:
-                            return env['DISPLAY']
-                except (psutil.AccessDenied, psutil.NoSuchProcess, AttributeError):
+                    if proc.info['username'] != username:
+                        continue
+                    env = proc.info['environ'] or {}
+                    if 'DISPLAY' in env and self.is_valid_display(env['DISPLAY']):
+                        display = env['DISPLAY']
+                        break
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
                     continue
-        except Exception:
-            pass
-        return ':0'  # Default fallback
+        except Exception as e:
+            self.logger.debug(f"Could not determine display for {username}: {e}")
+
+        self.display_cache[username] = (display, time.monotonic())
+        return display
 
     def is_valid_username(self, username: str) -> bool:
         """Validate username to prevent injection attacks"""
@@ -576,77 +600,59 @@ class ChildMinder:
             return False
         return bool(re.match(r'^[a-zA-Z0-9._-]*:[0-9]+(\.[0-9]+)?$', display))
 
+    def run_as_user(self, username: str, argv: list, wait: bool = True):
+        """Run a command as another user with a session environment.
+
+        Drops privileges directly rather than shelling out through sudo, whose
+        env_reset would discard DBUS_SESSION_BUS_ADDRESS and leave notification
+        helpers talking to the wrong bus.
+        """
+        try:
+            pw = pwd.getpwnam(username)
+        except KeyError:
+            self.logger.warning(f"User {username} not found in passwd")
+            return None
+
+        env = {
+            'DISPLAY': self.get_user_display(username),
+            'DBUS_SESSION_BUS_ADDRESS': f"unix:path=/run/user/{pw.pw_uid}/bus",
+            'XDG_RUNTIME_DIR': f"/run/user/{pw.pw_uid}",
+            'HOME': pw.pw_dir,
+            'USER': username,
+            'LOGNAME': username,
+            'PATH': '/usr/local/bin:/usr/bin:/bin',
+        }
+        kwargs = dict(user=pw.pw_uid, group=pw.pw_gid, extra_groups=[], env=env,
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            if not wait:
+                return subprocess.Popen(argv, **kwargs)
+            return subprocess.run(argv, timeout=NOTIFY_TIMEOUT, **kwargs)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError, PermissionError) as e:
+            self.logger.debug(f"Could not run {argv[0]} as {username}: {e}")
+            return None
+
     def send_notification(self, username: str, title: str, message: str,
                          urgency: str = 'normal', play_sound: bool = False) -> bool:
-        """Safely send a desktop notification to a user without shell injection"""
-        # Validate inputs
+        """Send a desktop notification to a user, returning whether it was delivered"""
         if not self.is_valid_username(username):
             self.logger.error(f"Invalid username for notification: {username}")
             return False
 
-        display = self.get_user_display(username)
-        if not self.is_valid_display(display):
-            display = ':0'
-
         if urgency not in ('low', 'normal', 'critical'):
             urgency = 'normal'
 
-        # Get user ID for DBUS
-        try:
-            uid = pwd.getpwnam(username).pw_uid
-            dbus_addr = f"unix:path=/run/user/{uid}/bus"
-        except KeyError:
-            self.logger.warning(f"User {username} not found in passwd")
-            return False
+        result = self.run_as_user(
+            username, ['notify-send', '-u', urgency, '-t', '10000', title, message])
+        delivered = result is not None and result.returncode == 0
 
-        success = False
-        env = os.environ.copy()
-        env['DISPLAY'] = display
-
-        # Method 1: notify-send with DBUS
-        if os.path.exists(f"/run/user/{uid}/bus"):
-            env['DBUS_SESSION_BUS_ADDRESS'] = dbus_addr
-            try:
-                result = subprocess.run(
-                    ['sudo', '-u', username, 'notify-send', '-u', urgency, '-t', '10000', title, message],
-                    capture_output=True, timeout=2, env=env
-                )
-                if result.returncode == 0:
-                    success = True
-            except subprocess.TimeoutExpired:
-                pass
-
-        # Method 2: Try without explicit DBUS
-        if not success:
-            try:
-                result = subprocess.run(
-                    ['sudo', '-u', username, 'notify-send', '-u', urgency, title, message],
-                    capture_output=True, timeout=2, env=env
-                )
-                if result.returncode == 0:
-                    success = True
-            except subprocess.TimeoutExpired:
-                pass
-
-        # Play sound if requested
         if play_sound:
-            sound_files = [
-                '/usr/share/sounds/freedesktop/stereo/dialog-warning.oga',
-                '/usr/share/sounds/ubuntu/stereo/dialog-warning.ogg',
-                '/usr/share/sounds/gnome/default/alerts/glass.ogg'
-            ]
-            for sound in sound_files:
+            for sound in SOUND_FILES:
                 if os.path.exists(sound):
-                    try:
-                        subprocess.Popen(
-                            ['sudo', '-u', username, 'paplay', sound],
-                            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                        )
-                    except Exception:
-                        pass
+                    self.run_as_user(username, ['paplay', sound], wait=False)
                     break
 
-        return success
+        return delivered
 
     def load_user_control_state(self) -> dict:
         """Load user control state from file"""

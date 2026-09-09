@@ -18,7 +18,7 @@ A parental control system for Linux that monitors and controls application usage
 ## Requirements
 
 - Linux system with systemd
-- Python 3.6+
+- Python 3.9+
 - Root/sudo access
 - Python package: `psutil`
 

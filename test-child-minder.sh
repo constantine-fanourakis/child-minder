@@ -42,8 +42,8 @@ echo ""
 echo "Running system tests..."
 echo ""
 
-# Test 1: Check if Python 3.6+ is installed
-if test_feature "Python 3.6+" 'python3 -c "import sys; exit(0 if sys.version_info >= (3,6) else 1)"'; then
+# Test 1: Check if Python 3.9+ is installed
+if test_feature "Python 3.9+" 'python3 -c "import sys; exit(0 if sys.version_info >= (3,9) else 1)"'; then
     PASSED=$((PASSED + 1))
 else
     FAILED=$((FAILED + 1))
@@ -130,7 +130,7 @@ else
     echo -e "${YELLOW}Some tests failed. Please check the installation.${NC}"
     echo ""
     echo "Common fixes:"
-    echo "- Install psutil: pip3 install psutil"
+    echo "- Install psutil with your package manager, e.g. apt install python3-psutil"
     echo "- Install notify-send: apt install libnotify-bin"
     echo "- Re-run installer: sudo bash install.sh"
 fi

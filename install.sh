@@ -26,10 +26,12 @@ if [ -f /usr/bin/child-minder.py ] && [ -f /etc/child-minder/config.json ]; then
 fi
 
 # Check Python version
+# 3.9 is the floor: dropping privileges for notification helpers uses the
+# user/group arguments to subprocess, added in that release.
 PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
-REQUIRED_VERSION="3.6"
+REQUIRED_VERSION="3.9"
 if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$PYTHON_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]; then
-    echo "Error: Python 3.6 or higher is required. Found: $PYTHON_VERSION"
+    echo "Error: Python 3.9 or higher is required. Found: $PYTHON_VERSION"
     exit 1
 fi
 
