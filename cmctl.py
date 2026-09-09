@@ -20,6 +20,9 @@ LOG_PATH = "/var/log/child-minder/minder.log"
 
 SERVICE = "child-minder"
 
+# Commands that only read state and so do not need root
+READ_ONLY_COMMANDS = {"config", "usage", "status", "logs", "groups", "user-status"}
+
 
 def service_is_active() -> bool:
     """Check whether the child-minder service is currently running"""
@@ -51,6 +54,9 @@ class ChildMinderManager:
         except FileNotFoundError:
             print(f"Error: Config file not found at {self.config_path}")
             sys.exit(1)
+        except PermissionError:
+            print(f"Error: Permission denied reading {self.config_path} (try: sudo cmctl ...)")
+            sys.exit(1)
         except json.JSONDecodeError as e:
             print(f"Error: Invalid JSON in config file: {e}")
             sys.exit(1)
@@ -77,9 +83,13 @@ class ChildMinderManager:
                     if 'user_daily_usage' not in state:
                         state['user_daily_usage'] = {}
                     return state
+        except PermissionError:
+            print(f"Error: Permission denied reading {self.state_path} (try: sudo cmctl ...)")
+            sys.exit(1)
         except Exception as e:
             print(f"Warning: Could not load state: {e}")
-        return {"daily_usage": {}, "group_usage": {}, "last_reset": datetime.now().isoformat()}
+        return {"daily_usage": {}, "group_usage": {}, "user_daily_usage": {},
+                "last_reset": datetime.now().isoformat()}
         
     def add_blocked_process(self, process_name: str):
         """Add a process to the block list"""
@@ -990,7 +1000,12 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
     if not args.command:
         parser.print_help()
         sys.exit(0)
-        
+
+    if args.command not in READ_ONLY_COMMANDS and os.geteuid() != 0:
+        print(f"Error: '{args.command}' changes system state and must be run as root "
+              f"(try: sudo cmctl {args.command} ...)")
+        sys.exit(1)
+
     manager = ChildMinderManager()
     
     if args.command == 'block':

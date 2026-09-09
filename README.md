@@ -138,7 +138,9 @@ When both are set, **both are enforced** — whichever is reached first triggers
 
 ## Management Utility (`cmctl`)
 
-All commands require `sudo`. You can use either `cmctl` or `cmctl.py`.
+Commands that change configuration or account state require `sudo`; the
+read-only commands (`config`, `usage`, `status`, `logs`, `groups`,
+`user-status`) do not. You can use either `cmctl` or `cmctl.py`.
 
 ### View information
 
