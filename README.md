@@ -211,7 +211,7 @@ Overnight schedules are supported — use a start hour greater than the end hour
 ```bash
 cmctl enable                # Enable monitoring
 cmctl disable               # Disable monitoring (temporary)
-cmctl reset                 # Reset daily usage counters
+cmctl reset                 # Reset daily usage counters (signals the running service)
 ```
 
 ## Access Schedules

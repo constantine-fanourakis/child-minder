@@ -21,6 +21,12 @@ LOG_PATH = "/var/log/child-minder/minder.log"
 SERVICE = "child-minder"
 
 
+def service_is_active() -> bool:
+    """Check whether the child-minder service is currently running"""
+    result = subprocess.run(['systemctl', 'is-active', '--quiet', SERVICE], check=False)
+    return result.returncode == 0
+
+
 def atomic_write_json(path: Path, data: dict):
     """Write JSON to path atomically, so the daemon never reads a partial file"""
     temp_file = path.with_name(path.name + '.tmp')
@@ -357,16 +363,28 @@ class ChildMinderManager:
             print("No usage data available")
                     
     def reset_usage(self):
-        """Reset usage statistics"""
+        """Reset usage statistics.
+
+        The running daemon keeps counters in memory and rewrites the state file
+        every minute, so while it is up the reset is delegated to it by signal;
+        writing the file directly would be undone within the minute.
+        """
+        if service_is_active():
+            result = subprocess.run(['systemctl', 'kill', '--signal=SIGUSR1', SERVICE],
+                                    capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Error: Could not signal {SERVICE}: {result.stderr.strip()}")
+                return
+            print("Usage statistics reset requested; the service will clear its counters")
+            return
+
         state = self.load_state()
         state['daily_usage'] = {}
         state['group_usage'] = {}
         state['user_daily_usage'] = {}
         state['last_reset'] = datetime.now().isoformat()
-        
         try:
-            with open(self.state_path, 'w') as f:
-                json.dump(state, f, indent=2)
+            atomic_write_json(self.state_path, state)
             print("Usage statistics reset successfully")
         except Exception as e:
             print(f"Error resetting usage: {e}")
