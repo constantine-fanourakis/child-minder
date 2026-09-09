@@ -7,6 +7,7 @@ A parental control system for monitoring and limiting application usage on Linux
 import os
 import time
 import json
+import math
 import signal
 import logging
 import logging.handlers
@@ -25,9 +26,17 @@ DEFAULT_CONFIG_PATH = "/etc/child-minder/config.json"
 DEFAULT_STATE_PATH = "/var/lib/child-minder/state.json"
 DEFAULT_LOG_PATH = "/var/log/child-minder/minder.log"
 
+# Copy of the last config that parsed, kept beside the state file and used when
+# the live config becomes unreadable
+LAST_GOOD_CONFIG_NAME = "config.last-good.json"
+
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
 
+# Seconds between SIGTERM and SIGKILL when closing an application
+TERMINATE_GRACE = 5
+# Shortest gap between two attempts to end the same user's session
+SESSION_END_INTERVAL = 60
 # How long a resolved DISPLAY stays usable before it is looked up again
 DISPLAY_CACHE_TTL = 300
 NOTIFY_TIMEOUT = 5
@@ -39,10 +48,6 @@ SOUND_FILES = [
     '/usr/share/sounds/gnome/default/alerts/glass.ogg',
 ]
 
-# Copy of the last config that parsed, kept beside the state file and used when
-# the live config becomes unreadable
-LAST_GOOD_CONFIG_NAME = "config.last-good.json"
-
 
 class ConfigError(Exception):
     """Raised when a configuration file cannot be read or parsed"""
@@ -53,37 +58,35 @@ class ChildMinder:
         self.config_path = Path(config_path)
         self.state_path = Path(state_path)
         self.log_path = Path(log_path)
-        
         # Ensure directories exist
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
         self.last_good_config_path = self.state_path.parent / LAST_GOOD_CONFIG_NAME
-        
-        # Setup logging
+
         self.setup_logging()
-        
-        # Load configuration
         self.config = self.load_config()
-        
+
         # Load or initialize state
         self.state = self.load_state()
         self.daily_usage: Dict[str, Dict[str, float]] = {}
         self.deserialize_usage(self.state.get("daily_usage", {}))
         self.group_usage: Dict[str, Dict[str, float]] = self.state.get("group_usage", {})
         self.user_daily_usage: Dict[str, float] = self.state.get("user_daily_usage", {})
-        self.warned_users: Dict[str, Set[int]] = {}    # {username: set of warning thresholds sent}
 
+        # Warning thresholds already used, so each one fires at most once a day
+        self.warned_limits: Dict[Tuple[str, str], Set[int]] = {}   # (user, process key)
+        self.warned_groups: Dict[Tuple[str, str], Set[int]] = {}   # (user, group)
+        self.warned_users: Dict[str, Set[int]] = {}                # user
+
+        self.session_ended_at: Dict[str, float] = {}
         self.display_cache: Dict[str, Tuple[str, float]] = {}
+        self.last_user_control_check = 0.0
 
-        # Track which warnings have been sent
-        self.warned_processes: Dict[int, Set[int]] = {}  # pid -> set of warning times
-        self.warned_groups: Dict[str, Dict[str, Set[int]]] = {}  # group -> user -> warning times
-        
         # User control state file
         self.user_control_file = Path("/var/lib/child-minder/user_control.json")
         self.user_control_state = self.load_user_control_state()
-        
+
         self.running = True
         self.reload_requested = False
         self.reset_requested = False
@@ -92,7 +95,7 @@ class ChildMinder:
         signal.signal(signal.SIGINT, self.stop_handler)
         signal.signal(signal.SIGHUP, self.reload_handler)
         signal.signal(signal.SIGUSR1, self.reset_handler)
-        
+
     def setup_logging(self):
         """Setup logging configuration.
 
@@ -109,7 +112,7 @@ class ChildMinder:
             handlers=[handler]
         )
         self.logger = logging.getLogger(__name__)
-        
+
     # Signal handlers only set flags; the work happens in the main loop so that
     # it cannot interleave with a state write already in progress.
     def stop_handler(self, signum, frame):
@@ -124,7 +127,7 @@ class ChildMinder:
     def reset_handler(self, signum, frame):
         """Handle SIGUSR1 for an out-of-band usage reset"""
         self.reset_requested = True
-        
+
     def read_config_file(self, path: Path) -> dict:
         """Read and validate one config file, raising ConfigError if unusable"""
         try:
@@ -168,6 +171,18 @@ class ChildMinder:
             self.atomic_write_json(self.last_good_config_path, config)
         except OSError as e:
             self.logger.warning(f"Could not save last known good config: {e}")
+
+    def reload_config(self):
+        """Reload configuration, keeping the running config if the new one is bad"""
+        self.logger.info("Reloading configuration...")
+        try:
+            config = self.read_config_file(self.config_path)
+        except ConfigError as e:
+            self.logger.error(f"{e}; keeping the configuration already in use")
+            return
+        self.config = config
+        self.save_last_good_config(config)
+        self.logger.info("Configuration reloaded successfully")
 
     def validate_config(self, config: dict) -> dict:
         """Validate and fill in missing config keys with defaults"""
@@ -224,29 +239,23 @@ class ChildMinder:
                 "violation_threshold": 3
             }
         }
-        
+
     def load_state(self) -> dict:
         """Load saved state from file"""
         try:
             if self.state_path.exists():
                 with open(self.state_path, 'r') as f:
-                    state = json.load(f)
-                    # Load group usage if present
-                    if "group_usage" in state:
-                        self.group_usage = state["group_usage"]
-                    # Load user daily usage if present
-                    if "user_daily_usage" in state:
-                        self.user_daily_usage = state["user_daily_usage"]
-                    return state
+                    return json.load(f)
         except Exception as e:
             self.logger.warning(f"Could not load state: {e}")
-        
+
         return {
             "daily_usage": {},
             "group_usage": {},
+            "user_daily_usage": {},
             "last_reset": datetime.now().isoformat()
         }
-        
+
     @staticmethod
     def atomic_write_json(path: Path, data: dict):
         """Write JSON to path atomically, so a reader never sees a partial file"""
@@ -268,7 +277,7 @@ class ChildMinder:
             })
         except Exception as e:
             self.logger.error(f"Error saving state: {e}")
-            
+
     def serialize_usage(self) -> dict:
         """Serialize daily usage data for saving"""
         serialized = {}
@@ -277,7 +286,7 @@ class ChildMinder:
             for process, seconds in processes.items():
                 serialized[user][process] = seconds
         return serialized
-        
+
     def deserialize_usage(self, data: dict):
         """Deserialize saved usage data"""
         self.daily_usage = {}
@@ -285,16 +294,17 @@ class ChildMinder:
             self.daily_usage[user] = {}
             for process, seconds in processes.items():
                 self.daily_usage[user][process] = float(seconds)
-                
+
     def clear_usage(self, reason: str):
         """Clear all usage counters and the warnings issued against them"""
         self.logger.info(f"Resetting usage counters: {reason}")
         self.daily_usage = {}
         self.group_usage = {}
         self.user_daily_usage = {}
-        self.warned_processes = {}
+        self.warned_limits = {}
         self.warned_groups = {}
         self.warned_users = {}
+        self.session_ended_at = {}
         self.state["last_reset"] = datetime.now().isoformat()
         self.save_state()
 
@@ -307,7 +317,7 @@ class ChildMinder:
             last_reset = datetime.now()
         if datetime.now().date() != last_reset.date():
             self.clear_usage("new day")
-            
+
     def get_username(self, uid: int) -> Optional[str]:
         """Get username from UID"""
         try:
@@ -392,92 +402,134 @@ class ChildMinder:
             self.group_usage[username][group_name] = 0
         self.group_usage[username][group_name] += seconds
     
-    def should_warn(self, remaining_seconds: float, pid: Optional[int] = None, 
-                    group_name: Optional[str] = None, username: Optional[str] = None) -> Optional[int]:
+    def warning_intervals(self) -> list:
+        """Warning thresholds in seconds, largest first"""
+        intervals = self.config.get('warning_intervals')
+        if not intervals:
+            intervals = [self.config.get('warning_time', 300)]
+        return sorted(intervals, reverse=True)
+
+    def consume_warning(self, consumed: Set[int], remaining_seconds: float) -> Optional[int]:
+        """Return the largest not-yet-used threshold that remaining_seconds has crossed.
+
+        Every crossed threshold is marked used, not just the one returned. A
+        process started with little quota left crosses several thresholds at
+        once; marking only one would emit a further warning on each following
+        pass until the list was exhausted.
         """
-        Check if a warning should be sent based on remaining time
-        Returns the warning interval in seconds if warning should be sent, None otherwise
-        """
-        # Get warning intervals (in seconds)
-        warning_intervals = self.config.get('warning_intervals', [])
-        if not warning_intervals:
-            # Fall back to single warning_time if no intervals defined
-            warning_time = self.config.get('warning_time', 300)
-            warning_intervals = [warning_time]
-        
-        for warning_seconds in sorted(warning_intervals):
-            # Check if we're within this warning threshold
-            if remaining_seconds <= warning_seconds:
-                # Check if we've already warned at this level
-                if pid is not None:
-                    # Process warning
-                    if pid not in self.warned_processes:
-                        self.warned_processes[pid] = set()
-                    if warning_seconds not in self.warned_processes[pid]:
-                        self.warned_processes[pid].add(warning_seconds)
-                        return warning_seconds
-                elif group_name and username:
-                    # Group warning
-                    if group_name not in self.warned_groups:
-                        self.warned_groups[group_name] = {}
-                    if username not in self.warned_groups[group_name]:
-                        self.warned_groups[group_name][username] = set()
-                    if warning_seconds not in self.warned_groups[group_name][username]:
-                        self.warned_groups[group_name][username].add(warning_seconds)
-                        return warning_seconds
-        
-        return None
-    
-    def warn_user_group(self, username: str, group_name: str, remaining_minutes: int):
-        """Send warning to user about group time limit"""
+        crossed = [w for w in self.warning_intervals() if remaining_seconds <= w]
+        fresh = [w for w in crossed if w not in consumed]
+        consumed.update(crossed)
+        return max(fresh) if fresh else None
+
+    def remaining_minutes(self, remaining_seconds: float) -> int:
+        """Round remaining seconds up to whole minutes for display"""
+        return max(0, math.ceil(remaining_seconds / 60))
+
+    def maybe_warn_process(self, username: str, key: str, remaining_seconds: float):
+        """Warn about an individual process limit if a threshold has just been crossed"""
+        consumed = self.warned_limits.setdefault((username, key), set())
+        if self.consume_warning(consumed, remaining_seconds) is None:
+            return
+        minutes = self.remaining_minutes(remaining_seconds)
+        self.emit_warning(
+            username,
+            "Time Limit Warning" if minutes > 1 else "FINAL WARNING",
+            f"{key} has {minutes} minute{'s' if minutes != 1 else ''} remaining today.",
+            minutes,
+            f"{key} time limit",
+        )
+
+    def maybe_warn_group(self, username: str, group_name: str, remaining_seconds: float):
+        """Warn about a group limit if a threshold has just been crossed"""
+        consumed = self.warned_groups.setdefault((username, group_name), set())
+        if self.consume_warning(consumed, remaining_seconds) is None:
+            return
+        minutes = self.remaining_minutes(remaining_seconds)
+        self.emit_warning(
+            username,
+            "Group Time Limit Warning" if minutes > 1 else "FINAL GROUP WARNING",
+            f"Group '{group_name}' has {minutes} minute{'s' if minutes != 1 else ''} remaining "
+            f"today. All apps in this group will close when time expires.",
+            minutes,
+            f"group '{group_name}' time limit",
+        )
+
+    def maybe_warn_user_daily(self, username: str, remaining_seconds: float):
+        """Warn about the overall daily screen time limit if a threshold has been crossed"""
+        consumed = self.warned_users.setdefault(username, set())
+        if self.consume_warning(consumed, remaining_seconds) is None:
+            return
+        minutes = self.remaining_minutes(remaining_seconds)
+        self.emit_warning(
+            username,
+            "Daily Screen Time Warning" if minutes > 1 else "FINAL SCREEN TIME WARNING",
+            f"You have {minutes} minute{'s' if minutes != 1 else ''} of screen time remaining "
+            f"today. All apps will close when time expires.",
+            minutes,
+            "daily screen time limit",
+        )
+
+    def emit_warning(self, username: str, title: str, message: str,
+                     minutes: int, subject: str):
+        """Deliver a time-limit warning over every channel appropriate to its urgency"""
         try:
-            # Ensure remaining_minutes is non-negative
-            remaining_minutes = max(0, remaining_minutes)
-
-            # Determine urgency based on time
-            urgency = 'critical' if remaining_minutes <= 5 else 'normal'
-            title = "Group Time Limit Warning" if remaining_minutes > 1 else "FINAL GROUP WARNING"
-
-            # Build message
-            message = (f"Group '{group_name}' has {remaining_minutes} minute{'s' if remaining_minutes > 1 else ''} remaining today. "
-                      f"All apps in this group will close when time expires.")
-            if remaining_minutes <= 2:
+            if minutes <= 2:
                 message += " SAVE YOUR WORK NOW!"
+            urgency = 'critical' if minutes <= 5 else 'normal'
 
-            # Send notification using safe method
-            play_sound = remaining_minutes <= 5
-            success = self.send_notification(username, title, message, urgency, play_sound)
+            delivered = self.send_notification(username, title, message, urgency,
+                                               play_sound=minutes <= 5)
+            if minutes <= 5:
+                delivered |= self.write_to_user_terminals(username, f"*** {title} ***\n{message}")
+            if minutes <= 2 or not delivered:
+                self.broadcast(f"{title}: {message}")
 
-            # Wall message for critical warnings
-            if remaining_minutes <= 2:
-                try:
-                    subprocess.run(['wall', f"GROUP WARNING: {message}"], capture_output=True, timeout=2)
-                    success = True
-                except subprocess.TimeoutExpired:
-                    pass
-
-            if success:
-                self.logger.info(f"Warned user {username} about group '{group_name}' time limit ({remaining_minutes} min remaining)")
-            else:
-                self.logger.warning(f"Could not send desktop notification for {username}, using wall")
-                subprocess.run(['wall', f"GROUP WARNING: {group_name} has {remaining_minutes} minutes left"],
-                             capture_output=True, timeout=2)
-
+            self.logger.info(f"Warned {username} about {subject} ({minutes} min remaining)")
         except Exception as e:
-            self.logger.error(f"Error in group warning system: {e}")
-    
-    def get_process_limit(self, process_name: str) -> Optional[int]:
-        """Get time limit for process in seconds"""
+            self.logger.error(f"Error warning {username} about {subject}: {e}")
+
+    def broadcast(self, message: str):
+        """Send a message to all logged-in terminals"""
+        try:
+            subprocess.run(['wall', message], capture_output=True, timeout=5)
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+            self.logger.debug(f"Could not broadcast message: {e}")
+
+    def write_to_user_terminals(self, username: str, message: str) -> bool:
+        """Write a message directly to any terminals the user has open"""
+        written = False
+        try:
+            for proc in psutil.process_iter(['username', 'terminal']):
+                try:
+                    if proc.info['username'] != username or not proc.info['terminal']:
+                        continue
+                    with open(f"/dev/{proc.info['terminal']}", 'w') as tty:
+                        tty.write(f"\n{message}\n\n")
+                    written = True
+                except (psutil.NoSuchProcess, psutil.AccessDenied, IOError, OSError):
+                    continue
+        except Exception as e:
+            self.logger.debug(f"Could not write to terminals for {username}: {e}")
+        return written
+
+    def get_process_limit(self, process_name: str):
+        """Return (config key, limit in seconds) for a limited process, or (None, None).
+
+        Usage is accumulated under the config key rather than the observed
+        process name so that helper processes with different names (chrome and
+        chrome_crashpad_handler, say) share one counter with the limit.
+        """
         for limited_name, limit_minutes in self.config.get("limited_processes", {}).items():
             if self.pattern_matches(limited_name, process_name):
-                return limit_minutes * 60  # Convert to seconds
-        return None
+                return limited_name, limit_minutes * 60
+        return None, None
 
-    def is_process_monitored(self, process_name: str) -> bool:
-        """Check if process should be logged"""
-        return self.match_pattern(self.config.get("monitored_processes", []), process_name) is not None
+    def get_monitored_key(self, process_name: str) -> Optional[str]:
+        """Return the monitored_processes config key matching this process, if any"""
+        return self.match_pattern(self.config.get("monitored_processes", []), process_name)
 
-        
+    
     def update_usage(self, username: str, process_name: str, seconds: float):
         """Update usage statistics"""
         if username not in self.daily_usage:
@@ -490,81 +542,36 @@ class ChildMinder:
         """Get current usage in seconds"""
         return self.daily_usage.get(username, {}).get(process_name, 0)
         
-    def terminate_process(self, proc: psutil.Process, reason: str):
-        """Terminate a process and log the action"""
-        try:
-            process_name = proc.name()
-            pid = proc.pid
-            username = self.get_username(proc.uids().real)
-            
-            # Try graceful termination first
-            proc.terminate()
-            time.sleep(1)
-            
-            # Force kill if still running
-            if proc.is_running():
+    def terminate_processes(self, targets: list):
+        """Terminate a batch of processes, escalating to SIGKILL after a grace period.
+
+        Signalling the whole batch before waiting keeps the grace period to one
+        interval no matter how many processes are involved; an application with
+        dozens of processes would otherwise stall the monitoring pass for as
+        many seconds.
+        """
+        if not targets:
+            return
+
+        signalled = []
+        for proc, reason in targets:
+            try:
+                info = f"{proc.name()} (PID: {proc.pid}, User: {proc.username()})"
+                proc.terminate()
+                signalled.append((proc, reason, info))
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                self.logger.debug(f"Could not terminate process: {e}")
+
+        gone, alive = psutil.wait_procs([p for p, _, _ in signalled], timeout=TERMINATE_GRACE)
+        for proc in alive:
+            try:
                 proc.kill()
-                
-            self.logger.warning(f"Terminated process: {process_name} (PID: {pid}, User: {username}) - Reason: {reason}")
-            
-        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
-            self.logger.debug(f"Could not terminate process: {e}")
-            
-    def warn_user(self, proc: psutil.Process, remaining_minutes: int):
-        """Send warning to user about time limit"""
-        try:
-            username = self.get_username(proc.uids().real)
-            process_name = proc.name()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
 
-            # Ensure remaining_minutes is non-negative
-            remaining_minutes = max(0, remaining_minutes)
+        for _, reason, info in signalled:
+            self.logger.warning(f"Terminated process: {info} - Reason: {reason}")
 
-            # Determine urgency based on time
-            urgency = 'critical' if remaining_minutes <= 5 else 'normal'
-            title = "Time Limit Warning" if remaining_minutes > 1 else "FINAL WARNING"
-
-            # Build message
-            message = f"{process_name} has {remaining_minutes} minute{'s' if remaining_minutes > 1 else ''} remaining today."
-            if remaining_minutes <= 2:
-                message += " SAVE YOUR WORK NOW!"
-
-            # Send notification using safe method
-            play_sound = remaining_minutes <= 5
-            success = self.send_notification(username, title, message, urgency, play_sound)
-
-            # Wall message for critical warnings
-            if remaining_minutes <= 2:
-                try:
-                    subprocess.run(['wall', f"WARNING: {message}"], capture_output=True, timeout=2)
-                    success = True
-                except subprocess.TimeoutExpired:
-                    pass
-
-            # Terminal message for active terminals (critical warnings only)
-            if remaining_minutes <= 5:
-                try:
-                    for proc_iter in psutil.process_iter(['username', 'terminal']):
-                        if proc_iter.username() == username and proc_iter.info['terminal']:
-                            try:
-                                tty = f"/dev/{proc_iter.info['terminal']}"
-                                with open(tty, 'w') as t:
-                                    t.write(f"\n*** {title} ***\n{message}\n\n")
-                                success = True
-                            except (IOError, OSError, PermissionError):
-                                continue
-                except Exception:
-                    pass
-
-            if success:
-                self.logger.info(f"Warned user {username} about {process_name} time limit ({remaining_minutes} min remaining)")
-            else:
-                self.logger.warning(f"Could not send desktop notification for {username}, using wall")
-                subprocess.run(['wall', f"TIME WARNING: {process_name} has {remaining_minutes} minutes left"],
-                             capture_output=True, timeout=2)
-
-        except Exception as e:
-            self.logger.error(f"Error in warning system: {e}")
-    
     def get_user_display(self, username: str) -> str:
         """Get the user's X display, caching the result for DISPLAY_CACHE_TTL seconds.
 
@@ -702,52 +709,42 @@ class ChildMinder:
         self.user_daily_usage.setdefault(username, 0)
         self.user_daily_usage[username] += seconds
 
-    def should_warn_user(self, username: str, remaining_seconds: float) -> Optional[int]:
-        """Check if a daily-limit warning should be sent to a user"""
-        warning_intervals = self.config.get('warning_intervals', [self.config.get('warning_time', 300)])
-        for w in sorted(warning_intervals):
-            if remaining_seconds <= w:
-                self.warned_users.setdefault(username, set())
-                if w not in self.warned_users[username]:
-                    self.warned_users[username].add(w)
-                    return w
-        return None
+    def end_user_session(self, username: str, reason: str):
+        """End a user's desktop session, at most once per SESSION_END_INTERVAL.
 
-    def warn_user_daily_limit(self, username: str, remaining_minutes: int):
-        """Send warning to user about their overall daily screen time limit"""
-        try:
-            remaining_minutes = max(0, remaining_minutes)
-            urgency = 'critical' if remaining_minutes <= 5 else 'normal'
-            title = "Daily Screen Time Warning" if remaining_minutes > 1 else "FINAL SCREEN TIME WARNING"
-            message = (f"You have {remaining_minutes} minute{'s' if remaining_minutes != 1 else ''} "
-                       f"of screen time remaining today. All apps will close when time expires.")
-            if remaining_minutes <= 2:
-                message += " SAVE YOUR WORK NOW!"
-            play_sound = remaining_minutes <= 5
-            self.send_notification(username, title, message, urgency, play_sound)
-            if remaining_minutes <= 2:
-                subprocess.run(['wall', f"SCREEN TIME: {message}"], capture_output=True, timeout=2)
-            self.logger.info(f"Warned {username} about daily limit ({remaining_minutes} min remaining)")
-        except Exception as e:
-            self.logger.error(f"Error in user daily limit warning: {e}")
+        Throttled because the conditions that call it (a disabled account, time
+        outside the allowed window, an exhausted daily limit) stay true until
+        the next daily reset. Signalling every process on every pass would stop
+        the user from staying logged in long enough to read why.
+        """
+        now = time.monotonic()
+        last = self.session_ended_at.get(username, 0)
+        if last and now - last < SESSION_END_INTERVAL:
+            return
+        self.session_ended_at[username] = now
 
-    def kill_user_processes(self, username: str):
-        """Kill all processes for a user"""
-        try:
-            killed_count = 0
-            for proc in psutil.process_iter(['username', 'pid', 'name']):
-                try:
-                    if proc.username() == username:
-                        proc.terminate()
-                        killed_count += 1
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+        self.logger.warning(f"Ending session for {username}: {reason}")
+        self.send_notification(username, "Session Ending",
+                               f"Your session is being closed: {reason}.", 'critical', True)
+        self.write_to_user_terminals(username, f"*** Session ending: {reason} ***")
+
+        # loginctl unwinds the session cleanly where logind manages it; the
+        # sweep below covers anything left behind, including non-session
+        # processes such as a detached screen or a lingering user service.
+        self.run_command(['loginctl', 'terminate-user', username], check=False)
+
+        targets = []
+        for proc in psutil.process_iter(['pid', 'uids']):
+            try:
+                uids = proc.info['uids']
+                if uids is None or self.get_username(uids.real) != username:
                     continue
-
-            if killed_count > 0:
-                self.logger.info(f"Terminated {killed_count} processes for user {username}")
-
-        except Exception as e:
-            self.logger.error(f"Error killing processes for user {username}: {e}")
+                if self.is_protected_process(proc):
+                    continue
+                targets.append((proc, reason))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        self.terminate_processes(targets)
 
     def handle_disabled_user(self, username: str) -> bool:
         """Handle a disabled user account - check for auto-restore or kill processes
@@ -769,8 +766,7 @@ class ChildMinder:
                     self.enable_user_account(username)
                     return True
 
-            # User is still disabled, kill their processes
-            self.kill_user_processes(username)
+            self.end_user_session(username, f"account disabled ({user_info.get('reason', 'no reason given')})")
             return False
 
         except Exception as e:
@@ -808,6 +804,7 @@ class ChildMinder:
             if username in self.user_control_state.get("disabled_users", {}):
                 del self.user_control_state["disabled_users"][username]
                 self.save_user_control_state()
+            self.session_ended_at.pop(username, None)
 
             self.logger.info(f"User account re-enabled: {username}")
 
@@ -818,7 +815,11 @@ class ChildMinder:
         """Save the user control state to file"""
         try:
             self.user_control_file.parent.mkdir(parents=True, exist_ok=True)
-            self.atomic_write_json(self.user_control_file, self.user_control_state)
+            # Atomic write: write to temp file then rename
+            temp_file = self.user_control_file.with_suffix('.tmp')
+            with open(temp_file, 'w') as f:
+                json.dump(self.user_control_state, f, indent=2)
+            temp_file.rename(self.user_control_file)
         except Exception as e:
             self.logger.error(f"Error saving user control state: {e}")
 
@@ -906,134 +907,139 @@ class ChildMinder:
             self.logger.error(f"Error checking access hours for {username}: {e}")
             return True  # Default to allowing access on error
             
-    def monitor_processes(self):
-        """Main monitoring loop iteration"""
-        # First, check for disabled users if user control is enabled
-        if self.config.get("user_control", {}).get("enabled", False):
-            # Reload user control state
-            self.user_control_state = self.load_user_control_state()
-            
-            # Handle any disabled users (snapshot keys to avoid mutation during iteration)
-            for username in list(self.user_control_state.get("disabled_users", {})):
-                self.handle_disabled_user(username)
-            
-            # Check access hours for all monitored users
-            for username in self.config.get("monitored_users", []):
-                if not self.check_user_access_hours(username):
-                    # User is outside allowed hours, kill their processes
-                    self.kill_user_processes(username)
-        
-        # Regular process monitoring
-        active_users: set = set()
-        for proc in psutil.process_iter(['pid', 'name', 'username', 'uids']):
+    def enforce_user_control(self):
+        """Enforce account disables and access-hour schedules.
+
+        Throttled to user_control.check_interval so that a user outside their
+        allowed hours has their session ended periodically rather than having
+        every process signalled on every monitoring pass.
+        """
+        settings = self.config.get("user_control", {})
+        if not settings.get("enabled", False):
+            return
+
+        interval = settings.get("check_interval", 60)
+        now = time.monotonic()
+        if now - self.last_user_control_check < interval:
+            return
+        self.last_user_control_check = now
+
+        self.user_control_state = self.load_user_control_state()
+
+        # Snapshot keys: handle_disabled_user can re-enable and remove entries
+        for username in list(self.user_control_state.get("disabled_users", {})):
+            self.handle_disabled_user(username)
+
+        for username in self.config.get("monitored_users", []):
+            if username in self.user_control_state.get("disabled_users", {}):
+                continue  # already handled above
+            if not self.check_user_access_hours(username):
+                self.end_user_session(username, "outside allowed access hours")
+
+    def monitor_processes(self, elapsed: float):
+        """Run one monitoring pass, charging elapsed seconds against active limits"""
+        self.enforce_user_control()
+
+        to_terminate = []       # [(proc, reason)]
+        tracked = []            # [(proc, username, limit_key, group_name)]
+        active_users = set()
+        limited_keys = {}       # {(username, key): limit_seconds}
+        monitored_keys = set()  # {(username, key)}
+        seen_groups = set()     # {(username, group)}
+        limited_groups = {}     # {(username, group): limit_seconds}
+
+        for proc in psutil.process_iter(['pid', 'name', 'uids']):
             try:
-                # Get process info
                 pinfo = proc.info
-                
                 uids = pinfo['uids']
-                if uids is None:  # kernel thread
+                process_name = pinfo['name']
+                if uids is None or not process_name:
                     continue
 
                 username = self.get_username(uids.real)
                 if not username or not self.should_monitor_user(username, uids.real):
                     continue
 
-                process_name = pinfo['name']
-
-                # Check if process is blocked
-                if self.is_process_blocked(process_name) and not self.is_protected_process(proc):
-                    self.terminate_process(proc, "Blocked application")
+                if self.is_process_blocked(process_name):
+                    if not self.is_protected_process(proc):
+                        to_terminate.append((proc, "Blocked application"))
                     continue
-                
-                # Check which group this process belongs to, if any
+
                 group_name = self.get_process_group(process_name)
+                limit_key, limit_seconds = self.get_process_limit(process_name)
+                usage_key = limit_key or self.get_monitored_key(process_name)
 
-                # Track for user daily limit (only count limited/monitored processes)
-                if (group_name or self.get_process_limit(process_name) or self.is_process_monitored(process_name)):
-                    active_users.add(username)
+                if not group_name and not usage_key:
+                    continue
 
-                # Track whether to terminate due to limits
-                should_terminate = False
-                terminate_reason = ""
-
-                # Track whether usage was already updated (to avoid double counting)
-                usage_updated = False
-                group_usage_updated = False
-
-                # Check group limits first (if applicable)
+                active_users.add(username)
+                if limit_key:
+                    limited_keys[(username, limit_key)] = limit_seconds
+                elif usage_key:
+                    monitored_keys.add((username, usage_key))
                 if group_name:
+                    seen_groups.add((username, group_name))
                     group_limit = self.get_group_limit(group_name)
                     if group_limit:
-                        # Update group usage
-                        self.update_group_usage(username, group_name, self.config['check_interval'])
-                        group_usage_updated = True
-                        current_group_usage = self.get_group_usage(username, group_name)
+                        limited_groups[(username, group_name)] = group_limit
 
-                        if current_group_usage >= group_limit:
-                            should_terminate = True
-                            terminate_reason = f"Group '{group_name}' daily limit exceeded ({group_limit/60:.0f} minutes)"
-                        else:
-                            # Check if we should warn
-                            remaining_seconds = group_limit - current_group_usage
-                            warning_level = self.should_warn(remaining_seconds,
-                                                            group_name=group_name,
-                                                            username=username)
-                            if warning_level:
-                                remaining_minutes = int(remaining_seconds / 60)
-                                self.warn_user_group(username, group_name, remaining_minutes)
+                tracked.append((proc, username, limit_key, group_name))
 
-                # Check individual time limits
-                individual_limit = self.get_process_limit(process_name)
-                if individual_limit:
-                    # Update individual usage
-                    self.update_usage(username, process_name, self.config['check_interval'])
-                    usage_updated = True
-                    current_usage = self.get_usage(username, process_name)
-
-                    if current_usage >= individual_limit:
-                        should_terminate = True
-                        terminate_reason = f"Individual daily time limit exceeded ({individual_limit/60:.0f} minutes)"
-                    else:
-                        # Check if we should warn
-                        remaining_seconds = individual_limit - current_usage
-                        warning_level = self.should_warn(remaining_seconds, pid=proc.pid)
-                        if warning_level:
-                            remaining_minutes = int(remaining_seconds / 60)
-                            self.warn_user(proc, remaining_minutes)
-
-                # Terminate if any limit exceeded
-                if should_terminate:
-                    self.terminate_process(proc, terminate_reason)
-                    continue
-
-                # Log monitored processes (only update if not already updated by limits)
-                if self.is_process_monitored(process_name):
-                    if not usage_updated:
-                        self.update_usage(username, process_name, self.config['check_interval'])
-                    # Also update group usage for monitoring if not already updated
-                    if group_name and not group_usage_updated:
-                        self.update_group_usage(username, group_name, self.config['check_interval'])
-                    
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
             except Exception as e:
-                self.logger.error(f"Error monitoring process: {e}")
+                self.logger.error(f"Error inspecting process: {e}")
 
-        # Check user daily limits
+        # Charge each user/key pair once per pass. Charging per process would
+        # multiply usage by the process count, and a browser runs dozens.
+        over_keys = set()
+        for (username, key), limit in limited_keys.items():
+            self.update_usage(username, key, elapsed)
+            usage = self.get_usage(username, key)
+            if usage >= limit:
+                over_keys.add((username, key))
+            else:
+                self.maybe_warn_process(username, key, limit - usage)
+
+        for username, key in monitored_keys - set(limited_keys):
+            self.update_usage(username, key, elapsed)
+
+        for username, group_name in seen_groups:
+            self.update_group_usage(username, group_name, elapsed)
+
+        over_groups = set()
+        for (username, group_name), limit in limited_groups.items():
+            usage = self.get_group_usage(username, group_name)
+            if usage >= limit:
+                over_groups.add((username, group_name))
+            else:
+                self.maybe_warn_group(username, group_name, limit - usage)
+
+        for proc, username, limit_key, group_name in tracked:
+            if self.is_protected_process(proc):
+                continue
+            if limit_key and (username, limit_key) in over_keys:
+                limit = limited_keys[(username, limit_key)]
+                to_terminate.append(
+                    (proc, f"Daily limit for '{limit_key}' exceeded ({limit/60:.0f} minutes)"))
+            elif group_name and (username, group_name) in over_groups:
+                limit = limited_groups[(username, group_name)]
+                to_terminate.append(
+                    (proc, f"Group '{group_name}' daily limit exceeded ({limit/60:.0f} minutes)"))
+
+        self.terminate_processes(to_terminate)
+
         for username in active_users:
             user_limit = self.get_user_daily_limit(username)
-            if user_limit:
-                self.update_user_daily_usage(username, self.config['check_interval'])
-                current = self.get_user_daily_usage(username)
-                if current >= user_limit:
-                    self.logger.warning(
-                        f"User {username} daily screen time limit exceeded ({user_limit/60:.0f} min), killing processes"
-                    )
-                    self.kill_user_processes(username)
-                else:
-                    remaining = user_limit - current
-                    if self.should_warn_user(username, remaining):
-                        self.warn_user_daily_limit(username, int(remaining / 60))
+            if not user_limit:
+                continue
+            self.update_user_daily_usage(username, elapsed)
+            usage = self.get_user_daily_usage(username)
+            if usage >= user_limit:
+                self.end_user_session(
+                    username, f"daily screen time limit reached ({user_limit/60:.0f} minutes)")
+            else:
+                self.maybe_warn_user_daily(username, user_limit - usage)
 
     def log_usage_summary(self):
         """Log usage summary periodically"""
@@ -1048,7 +1054,12 @@ class ChildMinder:
             for user, processes in self.daily_usage.items():
                 for process, seconds in processes.items():
                     minutes = seconds / 60
-                    self.logger.info(f"  User: {user}, Process: {process}, Time: {minutes:.1f} minutes")
+                    _, limit = self.get_process_limit(process)
+                    if limit:
+                        remaining = max(0, (limit - seconds) / 60)
+                        self.logger.info(f"  User: {user}, Process: {process}, Time: {minutes:.1f} minutes (Remaining: {remaining:.0f} minutes)")
+                    else:
+                        self.logger.info(f"  User: {user}, Process: {process}, Time: {minutes:.1f} minutes")
 
         # Log group usage
         if self.group_usage:
@@ -1077,24 +1088,13 @@ class ChildMinder:
 
         self.logger.info("===================")
         
-    def reload_config(self):
-        """Reload configuration, keeping the running config if the new one is bad"""
-        self.logger.info("Reloading configuration...")
-        try:
-            config = self.read_config_file(self.config_path)
-        except ConfigError as e:
-            self.logger.error(f"{e}; keeping the configuration already in use")
-            return
-        self.config = config
-        self.save_last_good_config(config)
-        self.logger.info("Configuration reloaded successfully")
-        
     def run(self):
         """Main monitoring loop"""
         self.logger.info("Child Minder started")
 
         last_summary = time.monotonic()
         last_save = time.monotonic()
+        last_tick = time.monotonic()
 
         while self.running:
             try:
@@ -1107,12 +1107,20 @@ class ChildMinder:
 
                 if not self.config.get("enabled", True):
                     time.sleep(min(10, self.config.get('check_interval', 5)))
+                    last_tick = time.monotonic()
                     continue
 
                 self.reset_daily_usage()
-                self.monitor_processes()
 
+                # Charge actual elapsed time rather than the configured interval,
+                # which ignores how long each pass takes. The cap keeps a stall
+                # or a resume from suspend from being counted as screen time.
                 now = time.monotonic()
+                elapsed = min(now - last_tick, self.config['check_interval'] * 2)
+                last_tick = now
+
+                self.monitor_processes(elapsed)
+
                 if now - last_summary >= self.config.get('usage_log_interval', 60):
                     self.log_usage_summary()
                     last_summary = now
@@ -1126,6 +1134,7 @@ class ChildMinder:
             except Exception as e:
                 self.logger.exception(f"Error in main loop: {e}")
                 time.sleep(5)
+                last_tick = time.monotonic()
 
         self.save_state()
         self.logger.info("Child Minder stopped")
