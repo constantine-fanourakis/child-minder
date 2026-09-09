@@ -1,6 +1,7 @@
 {
   "enabled": true,
   "check_interval": 5,
+  "min_uid": 1000,
   "monitored_users": [
     "son_username"
   ],

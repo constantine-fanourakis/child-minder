@@ -129,6 +129,10 @@ class ChildMinder:
             self.logger.warning(f"Invalid check_interval, using default: 5")
             config['check_interval'] = 5
 
+        if not isinstance(config.get('min_uid'), int) or config['min_uid'] < 0:
+            self.logger.warning("Invalid min_uid, using default: 1000")
+            config['min_uid'] = 1000
+
         if not isinstance(config.get('monitored_users'), list):
             config['monitored_users'] = []
 
@@ -151,6 +155,7 @@ class ChildMinder:
         return {
             "enabled": True,
             "check_interval": 5,
+            "min_uid": 1000,
             "monitored_users": [],
             "blocked_processes": [],
             "limited_processes": {},
@@ -245,13 +250,29 @@ class ChildMinder:
         except KeyError:
             return None
             
-    def should_monitor_user(self, username: str) -> bool:
-        """Check if user should be monitored"""
+    def should_monitor_user(self, username: str, uid: int) -> bool:
+        """Check if user should be monitored.
+
+        System accounts are never monitored regardless of configuration: the
+        daemon terminates processes as root, and an empty monitored_users list
+        means "every human user", not "init and the kernel threads too".
+        """
+        if uid < self.config.get("min_uid", 1000):
+            return False
         monitored_users = self.config.get("monitored_users", [])
-        if not monitored_users:  # If empty, monitor all users
+        if not monitored_users:  # If empty, monitor all non-system users
             return True
         return username in monitored_users
-        
+
+    def is_protected_process(self, proc: psutil.Process) -> bool:
+        """Check whether a process must never be terminated.
+
+        Guards the daemon against killing itself or its own helpers, which would
+        otherwise be possible when the daemon shares a name with a pattern.
+        """
+        return proc.pid == 1 or proc.pid == os.getpid() or proc.ppid() == os.getpid()
+
+    
     @staticmethod
     def pattern_matches(pattern: str, process_name: str) -> bool:
         """Match a config pattern against a process name.
@@ -837,18 +858,18 @@ class ChildMinder:
                 # Get process info
                 pinfo = proc.info
                 
-                # Skip kernel threads and system processes
-                if pinfo['username'] is None:
+                uids = pinfo['uids']
+                if uids is None:  # kernel thread
                     continue
-                    
-                username = self.get_username(proc.uids().real)
-                if not username or not self.should_monitor_user(username):
+
+                username = self.get_username(uids.real)
+                if not username or not self.should_monitor_user(username, uids.real):
                     continue
-                    
+
                 process_name = pinfo['name']
-                
+
                 # Check if process is blocked
-                if self.is_process_blocked(process_name):
+                if self.is_process_blocked(process_name) and not self.is_protected_process(proc):
                     self.terminate_process(proc, "Blocked application")
                     continue
                 
