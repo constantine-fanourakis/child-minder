@@ -5,7 +5,6 @@ A parental control system for monitoring and limiting application usage on Linux
 """
 
 import os
-import sys
 import time
 import json
 import signal
@@ -69,15 +68,10 @@ class ChildMinder:
         
         # Load or initialize state
         self.state = self.load_state()
-        
-        # Track daily usage
         self.daily_usage: Dict[str, Dict[str, float]] = {}
-
-        # Track group usage
-        self.group_usage: Dict[str, Dict[str, float]] = {}
-
-        # Track user daily usage (across all monitored/limited processes)
-        self.user_daily_usage: Dict[str, float] = {}   # {username: seconds}
+        self.deserialize_usage(self.state.get("daily_usage", {}))
+        self.group_usage: Dict[str, Dict[str, float]] = self.state.get("group_usage", {})
+        self.user_daily_usage: Dict[str, float] = self.state.get("user_daily_usage", {})
         self.warned_users: Dict[str, Set[int]] = {}    # {username: set of warning thresholds sent}
 
         self.display_cache: Dict[str, Tuple[str, float]] = {}
@@ -90,13 +84,14 @@ class ChildMinder:
         self.user_control_file = Path("/var/lib/child-minder/user_control.json")
         self.user_control_state = self.load_user_control_state()
         
-        # Running flag
         self.running = True
-        
-        # Setup signal handlers
-        signal.signal(signal.SIGTERM, self.signal_handler)
-        signal.signal(signal.SIGINT, self.signal_handler)
+        self.reload_requested = False
+        self.reset_requested = False
+
+        signal.signal(signal.SIGTERM, self.stop_handler)
+        signal.signal(signal.SIGINT, self.stop_handler)
         signal.signal(signal.SIGHUP, self.reload_handler)
+        signal.signal(signal.SIGUSR1, self.reset_handler)
         
     def setup_logging(self):
         """Setup logging configuration.
@@ -115,17 +110,20 @@ class ChildMinder:
         )
         self.logger = logging.getLogger(__name__)
         
-    def signal_handler(self, signum, frame):
+    # Signal handlers only set flags; the work happens in the main loop so that
+    # it cannot interleave with a state write already in progress.
+    def stop_handler(self, signum, frame):
         """Handle shutdown signals"""
         self.logger.info(f"Received signal {signum}, shutting down...")
         self.running = False
-        self.save_state()
-        sys.exit(0)
 
     def reload_handler(self, signum, frame):
         """Handle SIGHUP for config reload"""
-        self.logger.info("Received SIGHUP, reloading configuration...")
-        self.reload_config()
+        self.reload_requested = True
+
+    def reset_handler(self, signum, frame):
+        """Handle SIGUSR1 for an out-of-band usage reset"""
+        self.reset_requested = True
         
     def read_config_file(self, path: Path) -> dict:
         """Read and validate one config file, raising ConfigError if unusable"""
@@ -288,19 +286,27 @@ class ChildMinder:
             for process, seconds in processes.items():
                 self.daily_usage[user][process] = float(seconds)
                 
+    def clear_usage(self, reason: str):
+        """Clear all usage counters and the warnings issued against them"""
+        self.logger.info(f"Resetting usage counters: {reason}")
+        self.daily_usage = {}
+        self.group_usage = {}
+        self.user_daily_usage = {}
+        self.warned_processes = {}
+        self.warned_groups = {}
+        self.warned_users = {}
+        self.state["last_reset"] = datetime.now().isoformat()
+        self.save_state()
+
     def reset_daily_usage(self):
-        """Reset daily usage counters"""
-        last_reset = datetime.fromisoformat(self.state.get("last_reset", datetime.now().isoformat()))
-        if datetime.now().date() > last_reset.date():
-            self.logger.info("Resetting daily usage counters")
-            self.daily_usage = {}
-            self.group_usage = {}
-            self.user_daily_usage = {}
-            self.warned_processes = {}
-            self.warned_groups = {}
-            self.warned_users = {}
-            self.state["last_reset"] = datetime.now().isoformat()
-            self.save_state()
+        """Reset daily usage counters when the date changes"""
+        try:
+            last_reset = datetime.fromisoformat(
+                self.state.get("last_reset", datetime.now().isoformat()))
+        except ValueError:
+            last_reset = datetime.now()
+        if datetime.now().date() != last_reset.date():
+            self.clear_usage("new day")
             
     def get_username(self, uid: int) -> Optional[str]:
         """Get username from UID"""
@@ -1086,48 +1092,42 @@ class ChildMinder:
     def run(self):
         """Main monitoring loop"""
         self.logger.info("Child Minder started")
-        
-        # Load saved usage data (with backward compatibility)
-        if "daily_usage" in self.state:
-            self.deserialize_usage(self.state["daily_usage"])
-        if "group_usage" in self.state:
-            self.group_usage = self.state["group_usage"]
-        if "user_daily_usage" in self.state:
-            self.user_daily_usage = self.state["user_daily_usage"]
-            
-        last_summary = time.time()
-        last_save = time.time()
-        
+
+        last_summary = time.monotonic()
+        last_save = time.monotonic()
+
         while self.running:
             try:
-                # Check if enabled
+                if self.reload_requested:
+                    self.reload_requested = False
+                    self.reload_config()
+                if self.reset_requested:
+                    self.reset_requested = False
+                    self.clear_usage("reset requested")
+
                 if not self.config.get("enabled", True):
-                    time.sleep(10)
+                    time.sleep(min(10, self.config.get('check_interval', 5)))
                     continue
-                    
-                # Reset daily counters if needed
+
                 self.reset_daily_usage()
-                
-                # Monitor processes
                 self.monitor_processes()
-                
-                # Log summary periodically
-                if time.time() - last_summary >= self.config.get('usage_log_interval', 60):
+
+                now = time.monotonic()
+                if now - last_summary >= self.config.get('usage_log_interval', 60):
                     self.log_usage_summary()
-                    last_summary = time.time()
-                    
-                # Save state periodically
-                if time.time() - last_save >= 60:
+                    last_summary = now
+
+                if now - last_save >= 60:
                     self.save_state()
-                    last_save = time.time()
-                    
-                # Sleep for check interval
+                    last_save = now
+
                 time.sleep(self.config.get('check_interval', 5))
-                
+
             except Exception as e:
-                self.logger.error(f"Error in main loop: {e}")
+                self.logger.exception(f"Error in main loop: {e}")
                 time.sleep(5)
-                
+
+        self.save_state()
         self.logger.info("Child Minder stopped")
 
 def main():
