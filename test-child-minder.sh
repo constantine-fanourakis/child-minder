@@ -44,73 +44,73 @@ echo ""
 
 # Test 1: Check if Python 3.6+ is installed
 if test_feature "Python 3.6+" 'python3 -c "import sys; exit(0 if sys.version_info >= (3,6) else 1)"'; then
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # Test 2: Check if psutil is installed
 if test_feature "psutil module" 'python3 -c "import psutil"'; then
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # Test 3: Check if service file exists
 if test_feature "service file" '[ -f /etc/systemd/system/child-minder.service ]'; then
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # Test 4: Check if main script exists
 if test_feature "main script" '[ -f /usr/bin/child-minder.py ]'; then
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # Test 5: Check if management utility exists
 if test_feature "management utility" '[ -f /usr/bin/cmctl.py ]'; then
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # Test 6: Check if config file exists
 if test_feature "config file" '[ -f /etc/child-minder/config.json ]'; then
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # Test 7: Check if directories exist
 if test_feature "required directories" '[ -d /var/lib/child-minder ] && [ -d /var/log/child-minder ]'; then
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # Test 8: Check if notification system is available
-if test_feature "notify-send" 'which notify-send'; then
-    ((PASSED++))
+if test_feature "notify-send" 'command -v notify-send >/dev/null'; then
+    PASSED=$((PASSED + 1))
 else
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
     echo "  Warning: Desktop notifications may not work"
 fi
 
 # Test 9: Test cmctl command
 if test_feature "cmctl command" '/usr/bin/cmctl config > /dev/null'; then
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 # Test 10: Check if service can be loaded
 if test_feature "service loading" 'systemctl daemon-reload && systemctl status child-minder > /dev/null 2>&1 || [ $? -eq 3 ]'; then
-    ((PASSED++))
+    PASSED=$((PASSED + 1))
 else
-    ((FAILED++))
+    FAILED=$((FAILED + 1))
 fi
 
 echo ""
