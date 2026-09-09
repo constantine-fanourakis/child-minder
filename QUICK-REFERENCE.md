@@ -245,12 +245,13 @@ sudo passwd -S johnny  # Should show 'L'
 {
   "enabled": true,
   "check_interval": 5,
+  "min_uid": 1000,
   "monitored_users": ["johnny", "sarah"],
-  "blocked_processes": ["discord", "telegram"],
+  "blocked_processes": ["discord*", "telegram*"],
   "process_groups": {
-    "games": ["minecraft", "steam", "roblox"],
-    "browsers": ["firefox", "chrome", "chromium"],
-    "social": ["discord", "telegram", "slack"]
+    "games": ["minecraft*", "steam*", "roblox*"],
+    "browsers": ["firefox*", "chrome*", "chromium*"],
+    "social": ["discord*", "telegram*", "slack*"]
   },
   "group_limits": {
     "games": 120,
@@ -262,10 +263,10 @@ sudo passwd -S johnny  # Should show 'L'
     "sarah": {"weekday": 90, "weekend": 120}
   },
   "limited_processes": {
-    "minecraft": 60,
-    "youtube": 45
+    "minecraft*": 60,
+    "youtube*": 45
   },
-  "monitored_processes": ["firefox", "chrome", "minecraft"],
+  "monitored_processes": ["firefox*", "chrome*", "minecraft*"],
   "warning_time": 300,
   "warning_intervals": [1800, 900, 600, 300, 120, 60],
   "usage_log_interval": 60,
@@ -275,6 +276,19 @@ sudo passwd -S johnny  # Should show 'L'
   }
 }
 ```
+
+## Process Patterns
+
+Patterns match a process name exactly, unless they contain `*`, `?` or `[`,
+which makes them a glob. Matching is case-insensitive and never by substring, so
+`sh` matches only `sh`, not `bash`.
+
+```bash
+ps -eo comm= | sort -u | grep -i steam   # find the real process names
+```
+
+Use a trailing `*` to catch helper processes: `steam*` covers `steamwebhelper`,
+and every process matching one pattern shares a single time counter.
 
 ## Important Files
 

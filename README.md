@@ -82,12 +82,14 @@ Configuration lives at `/etc/child-minder/config.json`. Changes are picked up on
 |-----|------|---------|-------------|
 | `enabled` | bool | `true` | Master on/off switch |
 | `check_interval` | int | `5` | Seconds between process checks |
-| `monitored_users` | list | `[]` | Usernames to monitor (empty = all users) |
-| `blocked_processes` | list | `[]` | Process names to block completely |
-| `limited_processes` | dict | `{}` | Process name → daily limit in minutes |
-| `process_groups` | dict | `{}` | Group name → list of process names |
+| `min_uid` | int | `1000` | Lowest UID that may be monitored; system accounts are never touched |
+| `monitored_users` | list | `[]` | Usernames to monitor (empty = all users at or above `min_uid`) |
+| `blocked_processes` | list | `[]` | Process patterns to block completely |
+| `limited_processes` | dict | `{}` | Process pattern → daily limit in minutes |
+| `process_groups` | dict | `{}` | Group name → list of process patterns |
 | `group_limits` | dict | `{}` | Group name → daily limit in minutes |
-| `monitored_processes` | list | `[]` | Process names to track usage for (logging only) |
+| `user_daily_limits` | dict | `{}` | Username → overall daily screen time, in minutes (see below) |
+| `monitored_processes` | list | `[]` | Process patterns to track usage for (logging only) |
 | `warning_time` | int | `300` | Seconds before limit to warn (single warning) |
 | `warning_intervals` | list | — | Multiple warning times in seconds (overrides `warning_time`) |
 | `usage_log_interval` | int | `60` | Seconds between usage summary logs |
@@ -100,6 +102,39 @@ Configuration lives at `/etc/child-minder/config.json`. Changes are picked up on
 | `enabled` | bool | `false` | Enable user account control features |
 | `check_interval` | int | `60` | Seconds between account and schedule checks |
 
+### `user_daily_limits`
+
+Either a plain number of minutes, or separate weekday and weekend allowances:
+
+```json
+"user_daily_limits": {
+  "johnny": {"weekday": 120, "weekend": 240}
+}
+```
+
+Screen time accrues while the user runs anything listed in `limited_processes`,
+`monitored_processes`, or a process group. When the allowance runs out the
+user's session is closed.
+
+### Process patterns
+
+A pattern matches a process name exactly unless it contains `*`, `?` or `[`, in
+which case it is treated as a shell glob. Matching is case-insensitive.
+
+```json
+"process_groups": {
+  "games": ["minecraft*", "steam*"]
+}
+```
+
+Use a trailing `*` for applications that spawn differently named helper
+processes: `steam*` also covers `steamwebhelper`, and `chrome*` covers
+`chrome_crashpad_handler`. All processes matching one pattern share a single
+counter, so a browser running thirty processes still accrues time once.
+
+Patterns are never matched as substrings. An entry of `sh` matches only a
+process actually called `sh`, not `bash` or `zsh`.
+
 ### Example config
 
 ```json
@@ -107,20 +142,23 @@ Configuration lives at `/etc/child-minder/config.json`. Changes are picked up on
   "enabled": true,
   "check_interval": 5,
   "monitored_users": ["johnny"],
-  "blocked_processes": ["discord", "telegram"],
+  "blocked_processes": ["discord*", "telegram*"],
   "process_groups": {
-    "games": ["minecraft", "steam", "roblox"],
-    "browsers": ["firefox", "chrome", "chromium"]
+    "games": ["minecraft*", "steam*", "roblox*"],
+    "browsers": ["firefox*", "chrome*", "chromium*"]
   },
   "group_limits": {
     "games": 120,
     "browsers": 180
   },
   "limited_processes": {
-    "minecraft": 60,
-    "youtube": 45
+    "minecraft*": 60,
+    "youtube*": 45
   },
-  "monitored_processes": ["firefox", "minecraft"],
+  "user_daily_limits": {
+    "johnny": {"weekday": 120, "weekend": 240}
+  },
+  "monitored_processes": ["firefox*", "minecraft*"],
   "warning_intervals": [1800, 900, 600, 300, 120, 60],
   "usage_log_interval": 300,
   "user_control": {
@@ -315,8 +353,9 @@ python3 -c "import psutil; print('OK')"
 
 ### Processes not being blocked
 
-- Verify the username is in `monitored_users`
-- Check process names match (case-insensitive partial match)
+- Verify the username is in `monitored_users` and their UID is at or above `min_uid`
+- Check the pattern matches the process name exactly, or add a trailing `*`.
+  Confirm the name with `ps -eo comm= | sort -u | grep -i <app>`
 - Ensure service is running: `sudo systemctl status child-minder`
 
 ### Time limits not working
@@ -359,6 +398,17 @@ sudo bash uninstall.sh
 ```
 
 The script stops the service, re-enables any disabled user accounts, removes installed files, and optionally backs up your configuration.
+
+## Limitations
+
+Enforcement matches on process names, so it restrains a child who plays by the
+rules rather than one actively working around it. Copying or renaming a binary
+is enough to escape every limit here, and nothing detects that. Containing a
+determined user needs cgroup or LSM level controls, which this tool does not
+attempt.
+
+Usage is sampled every `check_interval` seconds, so recorded time can be off by
+up to one interval per application per day.
 
 ## See Also
 
