@@ -116,13 +116,17 @@ sudo cmctl set-user-hours johnny 8 21
 sudo cmctl add-weekday-window johnny 7 8     # Add 7-8 AM weekday window
 sudo cmctl add-weekend-window johnny 12 14   # Add 12-2 PM weekend window
 
-# Remove specific windows
+# Remove specific windows; removing the last one for a day type
+# returns that day to unrestricted access
 sudo cmctl remove-weekday-window johnny 7 8
 sudo cmctl remove-weekend-window johnny 12 14
 
 # Overnight schedules (start > end)
 sudo cmctl set-weekend-hours johnny 22 6     # 10 PM - 6 AM
 ```
+
+A day type with no windows is unrestricted. Weekday and weekend schedules are
+independent: setting one leaves the other open until it is set too.
 
 ### System Control
 ```bash

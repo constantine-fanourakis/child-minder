@@ -863,6 +863,8 @@ class ChildMinder:
 
         Supports both regular hours (e.g., 8-22) and overnight hours (e.g., 22-6).
         Also supports separate weekday and weekend schedules with multiple time windows.
+        A day type with no windows is unrestricted, so a user can be limited on
+        weekdays while their weekend stays open.
         """
         try:
             daily_schedules = self.user_control_state.get("daily_schedules", {})
@@ -885,10 +887,9 @@ class ChildMinder:
             else:
                 windows = normalized.get("weekday", [])
 
-            # If no windows defined for this day, deny access
-            # (User has a schedule entry, so parental controls are active)
+            # No windows for this day type means no restriction on it
             if not windows:
-                return False
+                return True
 
             # Check if current time falls within ANY of the windows
             for window in windows:

@@ -577,7 +577,7 @@ class ChildMinderManager:
     def _format_windows(self, windows: list) -> str:
         """Format a list of time windows for display"""
         if not windows:
-            return "No access"
+            return "Unrestricted"
         return ", ".join(self._format_hour_range(w["start_hour"], w["end_hour"]) for w in windows)
 
     def _print_schedule(self, schedule: dict, indent: str = ""):
@@ -591,7 +591,7 @@ class ChildMinderManager:
 
         if weekday_windows == weekend_windows:
             if len(weekday_windows) == 0:
-                print(f"{indent}Access Hours: No access (all days)")
+                print(f"{indent}Access Hours: Unrestricted (all days)")
             elif len(weekday_windows) == 1:
                 print(f"{indent}Access Hours: {weekday_str} (all days)")
             else:
@@ -631,15 +631,14 @@ class ChildMinderManager:
             window = {"start_hour": start_hour, "end_hour": end_hour}
             schedule["weekday"] = [window]
 
-            # Initialize weekend to same as weekday if empty
-            if not schedule.get("weekend"):
-                schedule["weekend"] = [window.copy()]
-
             user_control["daily_schedules"][username] = schedule
             self._save_user_control(user_control)
 
             print(f"Set weekday access hours for {username}: {self._format_hour_range(start_hour, end_hour)}")
             print("User will be automatically logged out outside these hours (Mon-Fri)")
+            if not schedule.get("weekend"):
+                print(f"Weekend access is unrestricted; set it with: "
+                      f"cmctl set-weekend-hours {username} START END")
 
         except Exception as e:
             print(f"Error setting weekday hours: {e}")
@@ -662,15 +661,14 @@ class ChildMinderManager:
             window = {"start_hour": start_hour, "end_hour": end_hour}
             schedule["weekend"] = [window]
 
-            # Initialize weekday to same as weekend if empty
-            if not schedule.get("weekday"):
-                schedule["weekday"] = [window.copy()]
-
             user_control["daily_schedules"][username] = schedule
             self._save_user_control(user_control)
 
             print(f"Set weekend access hours for {username}: {self._format_hour_range(start_hour, end_hour)}")
             print("User will be automatically logged out outside these hours (Sat-Sun)")
+            if not schedule.get("weekday"):
+                print(f"Weekday access is unrestricted; set it with: "
+                      f"cmctl set-weekday-hours {username} START END")
 
         except Exception as e:
             print(f"Error setting weekend hours: {e}")
@@ -763,7 +761,7 @@ class ChildMinderManager:
             if schedule["weekday"]:
                 print(f"Remaining weekday windows: {self._format_windows(schedule['weekday'])}")
             else:
-                print("Warning: No weekday windows remaining - user will have no weekday access!")
+                print("No weekday windows remaining - weekday access is now unrestricted")
 
         except Exception as e:
             print(f"Error removing weekday window: {e}")
@@ -792,7 +790,7 @@ class ChildMinderManager:
             if schedule["weekend"]:
                 print(f"Remaining weekend windows: {self._format_windows(schedule['weekend'])}")
             else:
-                print("Warning: No weekend windows remaining - user will have no weekend access!")
+                print("No weekend windows remaining - weekend access is now unrestricted")
 
         except Exception as e:
             print(f"Error removing weekend window: {e}")

@@ -256,14 +256,22 @@ cmctl reset                 # Reset daily usage counters (signals the running se
 
 Access schedules control when a user can log in. Outside allowed hours, the user is automatically logged out and all their processes are terminated.
 
+A day type with no windows is unrestricted. Weekdays and weekends are set
+independently, so restricting one leaves the other open until you restrict it
+too, and removing a user's last window for a day type returns that day to
+unrestricted rather than locking them out.
+
 ### Separate weekday/weekend hours
 
 ```bash
-# Strict school-day hours
+# Restrict school days only; weekends stay unrestricted
 sudo cmctl set-weekday-hours johnny 15 20   # 3 PM - 8 PM
 
-# Relaxed weekend hours
+# Restrict weekends as well
 sudo cmctl set-weekend-hours johnny 9 22    # 9 AM - 10 PM
+
+# Lift the weekday restriction again
+sudo cmctl remove-weekday-window johnny 15 20
 ```
 
 ### Multiple time windows
