@@ -271,8 +271,19 @@ sudo cmctl set-weekday-hours johnny 15 20   # 3 PM - 8 PM
 sudo cmctl set-weekend-hours johnny 9 22    # 9 AM - 10 PM
 
 # Lift the weekday restriction again
-sudo cmctl remove-weekday-window johnny 15 20
+sudo cmctl clear-weekday-windows johnny
 ```
+
+### Clearing a schedule
+
+```bash
+sudo cmctl clear-weekday-windows johnny   # weekdays unrestricted
+sudo cmctl clear-weekend-windows johnny   # weekends unrestricted
+sudo cmctl clear-user-hours johnny        # unrestricted at any time
+```
+
+`remove-weekday-window` and `remove-weekend-window` drop one window at a time
+and need its exact hours; the clear commands remove all of them at once.
 
 ### Multiple time windows
 

@@ -121,6 +121,11 @@ sudo cmctl add-weekend-window johnny 12 14   # Add 12-2 PM weekend window
 sudo cmctl remove-weekday-window johnny 7 8
 sudo cmctl remove-weekend-window johnny 12 14
 
+# Clear all windows for a day type, or the whole schedule
+sudo cmctl clear-weekday-windows johnny      # weekdays unrestricted
+sudo cmctl clear-weekend-windows johnny      # weekends unrestricted
+sudo cmctl clear-user-hours johnny           # unrestricted at any time
+
 # Overnight schedules (start > end)
 sudo cmctl set-weekend-hours johnny 22 6     # 10 PM - 6 AM
 ```

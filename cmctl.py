@@ -795,6 +795,66 @@ class ChildMinderManager:
         except Exception as e:
             print(f"Error removing weekend window: {e}")
 
+    def _clear_windows(self, username: str, day_type: str):
+        """Clear every access window of one day type, leaving that day unrestricted"""
+        label = "Weekday" if day_type == "weekday" else "Weekend"
+        user_control = self._load_user_control()
+
+        if username not in user_control["daily_schedules"]:
+            print(f"{label} access for {username} is already unrestricted")
+            return
+
+        schedule = self._normalize_schedule(user_control["daily_schedules"][username])
+        if not schedule.get(day_type):
+            print(f"{label} access for {username} is already unrestricted")
+            return
+
+        schedule[day_type] = []
+        other = "weekend" if day_type == "weekday" else "weekday"
+        if schedule.get(other):
+            user_control["daily_schedules"][username] = schedule
+            print(f"Cleared {day_type} windows for {username}; "
+                  f"{day_type} access is now unrestricted")
+            print(f"{'Weekend' if other == 'weekend' else 'Weekday'} windows: "
+                  f"{self._format_windows(schedule[other])}")
+        else:
+            # Both day types are empty, which is what having no entry means;
+            # drop the entry rather than leave an empty one behind.
+            del user_control["daily_schedules"][username]
+            print(f"Cleared {day_type} windows for {username}; "
+                  f"access is now unrestricted at any time")
+
+        self._save_user_control(user_control)
+
+    def clear_weekday_windows(self, username: str):
+        """Remove all weekday access windows, leaving weekdays unrestricted"""
+        try:
+            self._clear_windows(username, "weekday")
+        except Exception as e:
+            print(f"Error clearing weekday windows: {e}")
+
+    def clear_weekend_windows(self, username: str):
+        """Remove all weekend access windows, leaving weekends unrestricted"""
+        try:
+            self._clear_windows(username, "weekend")
+        except Exception as e:
+            print(f"Error clearing weekend windows: {e}")
+
+    def clear_user_hours(self, username: str):
+        """Remove a user's access schedule entirely, allowing access at any time"""
+        try:
+            user_control = self._load_user_control()
+            if username not in user_control["daily_schedules"]:
+                print(f"Access hours for {username} are already unrestricted")
+                return
+
+            del user_control["daily_schedules"][username]
+            self._save_user_control(user_control)
+            print(f"Cleared all access hours for {username}; "
+                  f"access is now unrestricted at any time")
+        except Exception as e:
+            print(f"Error clearing access hours: {e}")
+
     def set_user_hours(self, username: str, start_hour: int, end_hour: int):
         """Set allowed access hours for a user (backward-compatible, sets weekday hours)"""
         self.set_weekday_hours(username, start_hour, end_hour)
@@ -987,6 +1047,19 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
     remove_weekend_window_parser.add_argument('start', type=int, help='Start hour (0-23)')
     remove_weekend_window_parser.add_argument('end', type=int, help='End hour (0-23)')
 
+    # Clear window commands
+    clear_weekday_parser = subparsers.add_parser('clear-weekday-windows',
+        help='Remove all weekday access windows (weekdays become unrestricted)')
+    clear_weekday_parser.add_argument('username', help='Username')
+
+    clear_weekend_parser = subparsers.add_parser('clear-weekend-windows',
+        help='Remove all weekend access windows (weekends become unrestricted)')
+    clear_weekend_parser.add_argument('username', help='Username')
+
+    clear_hours_parser = subparsers.add_parser('clear-user-hours',
+        help='Remove a user access schedule entirely (access at any time)')
+    clear_hours_parser.add_argument('username', help='Username')
+
     user_status_parser = subparsers.add_parser('user-status', help='Show user account status')
     user_status_parser.add_argument('username', nargs='?', help='Username (show all if not specified)')
     
@@ -1065,6 +1138,12 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
         manager.remove_weekday_window(args.username, args.start, args.end)
     elif args.command == 'remove-weekend-window':
         manager.remove_weekend_window(args.username, args.start, args.end)
+    elif args.command == 'clear-weekday-windows':
+        manager.clear_weekday_windows(args.username)
+    elif args.command == 'clear-weekend-windows':
+        manager.clear_weekend_windows(args.username)
+    elif args.command == 'clear-user-hours':
+        manager.clear_user_hours(args.username)
     elif args.command == 'user-status':
         manager.show_user_status(args.username)
 

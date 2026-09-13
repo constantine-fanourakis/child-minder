@@ -12,12 +12,14 @@ group-limit group-unlimit user-limit user-weekday-limit user-weekend-limit \
 user-unlimit groups add-user remove-user config usage status \
 reset logs enable disable disable-user enable-user set-weekday-hours \
 set-weekend-hours set-user-hours add-weekday-window add-weekend-window \
-remove-weekday-window remove-weekend-window user-status"
+remove-weekday-window remove-weekend-window clear-weekday-windows \
+clear-weekend-windows clear-user-hours user-status"
 
     # Commands that take a username as their first argument
     local user_commands="add-user remove-user disable-user enable-user \
 set-weekday-hours set-weekend-hours set-user-hours add-weekday-window \
 add-weekend-window remove-weekday-window remove-weekend-window user-status \
+clear-weekday-windows clear-weekend-windows clear-user-hours \
 user-limit user-weekday-limit user-weekend-limit user-unlimit"
 
     # Complete subcommand (first argument)
