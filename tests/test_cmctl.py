@@ -192,6 +192,19 @@ class AccountCommandTest(CmctlTestCase):
         self.assertEqual(self.run_calls, [])
         self.assertFalse(self.user_control_path.exists())
 
+    def test_unreadable_record_leaves_account_unlocked(self):
+        self.user_control_path.write_text("{not json")
+        out = self.run_cmctl("disable-user", current_username(), "-t", "2")
+        self.assertIn("Invalid JSON", out)
+        self.assertEqual(self.run_calls, [])
+
+    def test_failed_lock_leaves_no_record(self):
+        self.fake_run_result = lambda argv: mock.Mock(
+            returncode=1 if argv[0] == 'usermod' else 0, stdout='', stderr='denied')
+        out = self.run_cmctl("disable-user", current_username())
+        self.assertIn("Failed to disable account", out)
+        self.assertEqual(self.read_json(self.user_control_path)["disabled_users"], {})
+
     def test_disable_unknown_user_is_refused(self):
         out = self.run_cmctl("disable-user", "no-such-user-cmtest")
         self.assertIn("does not exist", out)

@@ -467,6 +467,22 @@ class ChildMinderManager:
                 print(f"Error: {username} is a system account and cannot be disabled")
                 return
 
+            disable_info = {
+                "disabled_at": datetime.now().isoformat(),
+                "reason": reason,
+                "disabled_by": os.environ.get("SUDO_USER") or pwd.getpwuid(os.geteuid()).pw_name
+            }
+            if hours is not None:
+                disable_info["re_enable_at"] = (datetime.now() + timedelta(hours=hours)).isoformat()
+
+            # The record is saved before the account is expired, so a failure
+            # to save cannot leave an account locked that the daemon would
+            # never re-enable and user-status would not show.
+            user_control = self._load_user_control()
+            previous = user_control["disabled_users"].get(username)
+            user_control["disabled_users"][username] = disable_info
+            self._save_user_control(user_control)
+
             # Expiring the account is what blocks every login path; a password
             # lock alone leaves SSH keys and passwordless display manager
             # sessions working.
@@ -474,26 +490,18 @@ class ChildMinderManager:
                                     capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"Error: Failed to disable account: {result.stderr.strip()}")
+                if previous is None:
+                    del user_control["disabled_users"][username]
+                else:
+                    user_control["disabled_users"][username] = previous
+                self._save_user_control(user_control)
                 return
             subprocess.run(['passwd', '-l', username], capture_output=True, text=True)
 
-            user_control = self._load_user_control()
-
-            disable_info = {
-                "disabled_at": datetime.now().isoformat(),
-                "reason": reason,
-                "disabled_by": os.environ.get("SUDO_USER") or pwd.getpwuid(os.geteuid()).pw_name
-            }
-            
             if hours is not None:
-                re_enable_time = datetime.now() + timedelta(hours=hours)
-                disable_info["re_enable_at"] = re_enable_time.isoformat()
                 print(f"User {username} disabled for {hours} hours")
             else:
                 print(f"User {username} disabled until manually re-enabled")
-            
-            user_control["disabled_users"][username] = disable_info
-            self._save_user_control(user_control)
 
             subprocess.run(['loginctl', 'terminate-user', username], check=False,
                            capture_output=True)
