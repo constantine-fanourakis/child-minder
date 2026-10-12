@@ -85,6 +85,15 @@ class ConfigCommandTest(CmctlTestCase):
         self.run_cmctl("unlimit", "minecraft*")
         self.assertEqual(self.read_json(self.config_path)["limited_processes"], {})
 
+    def test_saving_keeps_config_private(self):
+        os.chmod(self.config_path, 0o600)
+        old_umask = os.umask(0o022)
+        try:
+            self.run_cmctl("block", "steam*")
+        finally:
+            os.umask(old_umask)
+        self.assertEqual(os.stat(self.config_path).st_mode & 0o777, 0o600)
+
     def test_non_positive_limit_is_rejected(self):
         out = self.run_cmctl("limit", "minecraft*", "0")
         self.assertIn("must be a positive number", out)

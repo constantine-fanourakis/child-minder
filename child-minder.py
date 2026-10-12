@@ -287,7 +287,12 @@ class ChildMinder:
     def atomic_write_json(path: Path, data: dict):
         """Write JSON to path atomically, so a reader never sees a partial file"""
         temp_file = path.with_name(path.name + '.tmp')
-        with open(temp_file, 'w') as f:
+        # Created 0600 whatever the umask: the rename replaces the original
+        # file, mode included, and none of these files are for the child. The
+        # fchmod covers a leftover temp file, whose mode O_CREAT keeps.
+        fd = os.open(temp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w') as f:
             json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())

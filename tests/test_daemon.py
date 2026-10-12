@@ -1,6 +1,7 @@
 """Unit tests for the child-minder daemon's interfaces"""
 
 import json
+import os
 from datetime import datetime
 from unittest import mock
 
@@ -251,6 +252,15 @@ class UsageStateTest(MinderTestCase):
         self.assertEqual(reloaded.get_usage("kid", "steam*"), 30)
         self.assertEqual(reloaded.get_group_usage("kid", "games"), 40)
         self.assertEqual(reloaded.get_user_daily_usage("kid"), 50)
+
+    def test_saved_state_is_private(self):
+        minder = self.make_minder()
+        old_umask = os.umask(0o022)
+        try:
+            minder.save_state()
+        finally:
+            os.umask(old_umask)
+        self.assertEqual(os.stat(self.state_path).st_mode & 0o777, 0o600)
 
     def test_new_day_clears_usage(self):
         minder = self.make_minder()
