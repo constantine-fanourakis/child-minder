@@ -5,7 +5,7 @@ import os
 import unittest
 from unittest import mock
 
-from tests.support import CmctlTestCase, cmctl, current_username
+from tests.support import CmctlTestCase, MinderTestCase, cmctl, current_username
 
 
 class PrivilegeTest(CmctlTestCase):
@@ -274,3 +274,52 @@ class ScheduleCommandTest(CmctlTestCase):
         self.run_cmctl("deny-weekend-access", "kid")
         out = self.run_cmctl("user-status")
         self.assertIn("Access Hours: No access (all days)", out)
+
+
+class ScheduleMigrationTest(CmctlTestCase):
+    WINDOW = {"start_hour": 15, "end_hour": 20}
+
+    def write_user_control(self, data: dict):
+        with open(self.user_control_path, 'w') as f:
+            json.dump(data, f)
+
+    def test_old_file_shows_empty_day_type_as_denied(self):
+        self.write_user_control({"daily_schedules": {
+            "kid": {"weekday": [self.WINDOW], "weekend": []}}})
+        out = self.run_cmctl("user-status")
+        self.assertIn("Weekend (Sat-Sun): No access", out)
+        self.assertIn("clear-weekend-windows kid", out)
+
+    def test_saving_stamps_current_format(self):
+        self.run_cmctl("set-weekday-hours", "kid", "15", "20")
+        self.assertEqual(self.read_json(self.user_control_path)["schedule_format"],
+                         cmctl.SCHEDULE_FORMAT)
+
+    def test_old_file_is_migrated_before_changes(self):
+        self.write_user_control({"daily_schedules": {
+            "kid": {"weekday": [self.WINDOW], "weekend": []}}})
+        self.run_cmctl("add-weekday-window", "kid", "7", "8")
+        schedule = self.read_json(self.user_control_path)["daily_schedules"]["kid"]
+        self.assertEqual(schedule["no_access"], ["weekend"])
+
+
+class MigrationParityTest(MinderTestCase):
+    """The daemon and cmctl each migrate old files and must agree on the result"""
+
+    def test_daemon_and_cmctl_migrate_identically(self):
+        schedules = {
+            "a": {"weekday": [{"start_hour": 15, "end_hour": 20}], "weekend": []},
+            "b": {"weekday": [], "weekend": []},
+            "c": {"start_hour": 8, "end_hour": 20},
+            "d": {"weekday": {"start_hour": 8, "end_hour": 20},
+                  "weekend": {"start_hour": 9, "end_hour": 22}},
+            "e": {},
+        }
+        self.write_user_control({"daily_schedules": json.loads(json.dumps(schedules))})
+        daemon_result = self.make_minder().user_control_state["daily_schedules"]
+
+        manager = cmctl.ChildMinderManager()
+        cmctl_state = {"daily_schedules": json.loads(json.dumps(schedules))}
+        with mock.patch('builtins.print'):
+            manager._migrate_schedules(cmctl_state)
+        self.assertEqual(cmctl_state["daily_schedules"], daemon_result)
