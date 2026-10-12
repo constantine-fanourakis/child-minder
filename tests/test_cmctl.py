@@ -88,6 +88,11 @@ class ResetTest(CmctlTestCase):
         self.assertIn('--signal=SIGUSR1', kills[0])
         self.assertFalse(self.state_path.exists())
 
+    def test_signal_reaches_only_the_main_process(self):
+        self.run_cmctl("reset")
+        kills = [c for c in self.run_calls if c[:2] == ['systemctl', 'kill']]
+        self.assertIn('--kill-who=main', kills[0])
+
     def test_stopped_service_has_state_file_cleared(self):
         self.service_active = False
         with open(self.state_path, 'w') as f:

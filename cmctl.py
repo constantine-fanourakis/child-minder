@@ -381,7 +381,11 @@ class ChildMinderManager:
         writing the file directly would be undone within the minute.
         """
         if service_is_active():
-            result = subprocess.run(['systemctl', 'kill', '--signal=SIGUSR1', SERVICE],
+            # Only the main process: SIGUSR1 terminates the helpers the daemon
+            # runs (usermod, passwd), which can leave shadow lock files behind.
+            # --kill-who is the spelling systemd releases before 252 accept.
+            result = subprocess.run(['systemctl', 'kill', '--kill-who=main',
+                                     '--signal=SIGUSR1', SERVICE],
                                     capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"Error: Could not signal {SERVICE}: {result.stderr.strip()}")
