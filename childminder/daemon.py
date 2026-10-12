@@ -5,8 +5,6 @@ A parental control system for monitoring and limiting application usage on Linux
 
 import os
 import time
-import json
-import math
 import signal
 import logging
 import logging.handlers
@@ -14,13 +12,14 @@ import argparse
 import psutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Set, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import pwd
 import subprocess
 import re
 
 from childminder import accounts
 from childminder import config as cfg
+from childminder import policy
 from childminder import schedule
 from childminder import store
 
@@ -67,17 +66,8 @@ class ChildMinder:
         self.setup_logging()
         self.config = self.load_config()
 
-        # Load or initialize state
         self.state = self.load_state()
-        self.daily_usage: Dict[str, Dict[str, float]] = {}
-        self.deserialize_usage(self.state.get("daily_usage", {}))
-        self.group_usage: Dict[str, Dict[str, float]] = self.state.get("group_usage", {})
-        self.user_daily_usage: Dict[str, float] = self.state.get("user_daily_usage", {})
-
-        # Warning thresholds already used, so each one fires at most once a day
-        self.warned_limits: Dict[Tuple[str, str], Set[int]] = {}   # (user, process key)
-        self.warned_groups: Dict[Tuple[str, str], Set[int]] = {}   # (user, group)
-        self.warned_users: Dict[str, Set[int]] = {}                # user
+        self.usage = policy.Usage.from_state(self.state)
 
         self.session_ended_at: Dict[str, float] = {}
         self.display_cache: Dict[str, Tuple[str, float]] = {}
@@ -85,6 +75,7 @@ class ChildMinder:
 
         # Account disables and access schedules, kept beside the state file
         self.user_control = store.UserControlStore(self.state_path.parent / store.USER_CONTROL_NAME)
+        # The fallback load_user_control_state keeps if the file is unreadable
         self.user_control_state = store.normalize_user_control({})
         self.user_control_state = self.load_user_control_state()
 
@@ -179,59 +170,28 @@ class ChildMinder:
         self.logger.info("Configuration reloaded successfully")
 
     def load_state(self) -> dict:
-        """Load saved state from file"""
+        """Load saved usage, starting afresh if there is none or it is unreadable"""
         try:
-            if self.state_path.exists():
-                with open(self.state_path, 'r') as f:
-                    return json.load(f)
-        except Exception as e:
+            state = store.read_json(self.state_path)
+        except store.StoreError as e:
             self.logger.warning(f"Could not load state: {e}")
-
-        return {
-            "daily_usage": {},
-            "group_usage": {},
-            "user_daily_usage": {},
-            "last_reset": datetime.now().isoformat()
-        }
+            state = None
+        return state or {"last_reset": datetime.now().isoformat()}
 
     def save_state(self):
         """Save current state to file"""
         try:
             store.atomic_write_json(self.state_path, {
-                "daily_usage": self.serialize_usage(),
-                "group_usage": self.group_usage,
-                "user_daily_usage": self.user_daily_usage,
+                **self.usage.to_state(),
                 "last_reset": self.state.get("last_reset", datetime.now().isoformat())
             })
         except Exception as e:
             self.logger.error(f"Error saving state: {e}")
 
-    def serialize_usage(self) -> dict:
-        """Serialize daily usage data for saving"""
-        serialized = {}
-        for user, processes in self.daily_usage.items():
-            serialized[user] = {}
-            for process, seconds in processes.items():
-                serialized[user][process] = seconds
-        return serialized
-
-    def deserialize_usage(self, data: dict):
-        """Deserialize saved usage data"""
-        self.daily_usage = {}
-        for user, processes in data.items():
-            self.daily_usage[user] = {}
-            for process, seconds in processes.items():
-                self.daily_usage[user][process] = float(seconds)
-
     def clear_usage(self, reason: str):
         """Clear all usage counters and the warnings issued against them"""
         self.logger.info(f"Resetting usage counters: {reason}")
-        self.daily_usage = {}
-        self.group_usage = {}
-        self.user_daily_usage = {}
-        self.warned_limits = {}
-        self.warned_groups = {}
-        self.warned_users = {}
+        self.usage = policy.Usage()
         self.session_ended_at = {}
         self.state["last_reset"] = datetime.now().isoformat()
         self.save_state()
@@ -274,117 +234,40 @@ class ChildMinder:
             return True
         return username in monitored_users
 
-    def is_protected_process(self, proc: psutil.Process) -> bool:
+    @staticmethod
+    def is_protected_process(pid: int, ppid: Optional[int]) -> bool:
         """Check whether a process must never be terminated.
 
         Guards the daemon against killing itself or its own helpers, which would
         otherwise be possible when the daemon shares a name with a pattern.
         """
-        return proc.pid == 1 or proc.pid == os.getpid() or proc.ppid() == os.getpid()
+        own = os.getpid()
+        return pid == 1 or pid == own or ppid == own
 
-    def is_process_blocked(self, process_name: str) -> bool:
-        """Check if process is in block list"""
-        return cfg.match_pattern(self.config.get("blocked_processes", []), process_name) is not None
+    def deliver_warning(self, warning: policy.LimitWarning):
+        """Word a limit warning for the user and deliver it.
 
-    def get_process_group(self, process_name: str) -> Optional[str]:
-        """Get the group name for a process, if any.
-
-        A process listed in several groups is attributed to the first group that
-        matches in config order.
+        A process warning names the application seen under the limit, because
+        the key is a config pattern such as "minecraft*" that means nothing to
+        the user.
         """
-        for group_name, processes in self.config.get("process_groups", {}).items():
-            if cfg.match_pattern(processes, process_name):
-                return group_name
-        return None
-
-    
-    def get_group_limit(self, group_name: str) -> Optional[int]:
-        """Get time limit for a group in seconds"""
-        group_limits = self.config.get("group_limits", {})
-        if group_name in group_limits:
-            return group_limits[group_name] * 60  # Convert to seconds
-        return None
-    
-    def update_group_usage(self, username: str, group_name: str, seconds: float):
-        """Update group usage statistics"""
-        if username not in self.group_usage:
-            self.group_usage[username] = {}
-        if group_name not in self.group_usage[username]:
-            self.group_usage[username][group_name] = 0
-        self.group_usage[username][group_name] += seconds
-    
-    def warning_intervals(self) -> list:
-        """Warning thresholds in seconds, largest first"""
-        intervals = self.config.get('warning_intervals')
-        if not intervals:
-            intervals = [self.config.get('warning_time', 300)]
-        return sorted(intervals, reverse=True)
-
-    def consume_warning(self, consumed: Set[int], remaining_seconds: float) -> Optional[int]:
-        """Return the largest not-yet-used threshold that remaining_seconds has crossed.
-
-        Every crossed threshold is marked used, not just the one returned. A
-        process started with little quota left crosses several thresholds at
-        once; marking only one would emit a further warning on each following
-        pass until the list was exhausted.
-        """
-        crossed = [w for w in self.warning_intervals() if remaining_seconds <= w]
-        fresh = [w for w in crossed if w not in consumed]
-        consumed.update(crossed)
-        return max(fresh) if fresh else None
-
-    def remaining_minutes(self, remaining_seconds: float) -> int:
-        """Round remaining seconds up to whole minutes for display"""
-        return max(0, math.ceil(remaining_seconds / 60))
-
-    def maybe_warn_process(self, username: str, key: str, app_name: str,
-                           remaining_seconds: float):
-        """Warn about an individual process limit if a threshold has just been crossed.
-
-        The warning names app_name, a process seen under the limit, because key
-        is a config pattern such as "minecraft*" that means nothing to the user.
-        """
-        consumed = self.warned_limits.setdefault((username, key), set())
-        if self.consume_warning(consumed, remaining_seconds) is None:
-            return
-        minutes = self.remaining_minutes(remaining_seconds)
-        self.emit_warning(
-            username,
-            "Time Limit Warning" if minutes > 1 else "FINAL WARNING",
-            f"{app_name} has {minutes} minute{'s' if minutes != 1 else ''} remaining today.",
-            minutes,
-            f"{key} time limit",
-        )
-
-    def maybe_warn_group(self, username: str, group_name: str, remaining_seconds: float):
-        """Warn about a group limit if a threshold has just been crossed"""
-        consumed = self.warned_groups.setdefault((username, group_name), set())
-        if self.consume_warning(consumed, remaining_seconds) is None:
-            return
-        minutes = self.remaining_minutes(remaining_seconds)
-        self.emit_warning(
-            username,
-            "Group Time Limit Warning" if minutes > 1 else "FINAL GROUP WARNING",
-            f"Group '{group_name}' has {minutes} minute{'s' if minutes != 1 else ''} remaining "
-            f"today. All apps in this group will close when time expires.",
-            minutes,
-            f"group '{group_name}' time limit",
-        )
-
-    def maybe_warn_user_daily(self, username: str, remaining_seconds: float):
-        """Warn about the overall daily screen time limit if a threshold has been crossed"""
-        consumed = self.warned_users.setdefault(username, set())
-        if self.consume_warning(consumed, remaining_seconds) is None:
-            return
-        minutes = self.remaining_minutes(remaining_seconds)
-        self.emit_warning(
-            username,
-            "Daily Screen Time Warning" if minutes > 1 else "FINAL SCREEN TIME WARNING",
-            f"You have {minutes} minute{'s' if minutes != 1 else ''} of screen time remaining "
-            f"today. All apps will close when time expires.",
-            minutes,
-            "daily screen time limit",
-        )
+        minutes = warning.minutes
+        span = f"{minutes} minute{'s' if minutes != 1 else ''}"
+        if warning.kind == "process":
+            title = "Time Limit Warning" if minutes > 1 else "FINAL WARNING"
+            message = f"{warning.subject} has {span} remaining today."
+            subject = f"{warning.key} time limit"
+        elif warning.kind == "group":
+            title = "Group Time Limit Warning" if minutes > 1 else "FINAL GROUP WARNING"
+            message = (f"Group '{warning.subject}' has {span} remaining today. "
+                       f"All apps in this group will close when time expires.")
+            subject = f"group '{warning.subject}' time limit"
+        else:
+            title = "Daily Screen Time Warning" if minutes > 1 else "FINAL SCREEN TIME WARNING"
+            message = (f"You have {span} of screen time remaining today. "
+                       f"All apps will close when time expires.")
+            subject = "daily screen time limit"
+        self.emit_warning(warning.username, title, message, minutes, subject)
 
     def emit_warning(self, username: str, title: str, message: str,
                      minutes: int, subject: str):
@@ -432,35 +315,6 @@ class ChildMinder:
                 self.logger.debug(f"Could not write to {terminal}: {e}")
         return written
 
-    def get_process_limit(self, process_name: str):
-        """Return (config key, limit in seconds) for a limited process, or (None, None).
-
-        Usage is accumulated under the config key rather than the observed
-        process name so that helper processes with different names (chrome and
-        chrome_crashpad_handler, say) share one counter with the limit.
-        """
-        for limited_name, limit_minutes in self.config.get("limited_processes", {}).items():
-            if cfg.pattern_matches(limited_name, process_name):
-                return limited_name, limit_minutes * 60
-        return None, None
-
-    def get_monitored_key(self, process_name: str) -> Optional[str]:
-        """Return the monitored_processes config key matching this process, if any"""
-        return cfg.match_pattern(self.config.get("monitored_processes", []), process_name)
-
-    
-    def update_usage(self, username: str, process_name: str, seconds: float):
-        """Update usage statistics"""
-        if username not in self.daily_usage:
-            self.daily_usage[username] = {}
-        if process_name not in self.daily_usage[username]:
-            self.daily_usage[username][process_name] = 0
-        self.daily_usage[username][process_name] += seconds
-        
-    def get_usage(self, username: str, process_name: str) -> float:
-        """Get current usage in seconds"""
-        return self.daily_usage.get(username, {}).get(process_name, 0)
-        
     def terminate_processes(self, targets: list):
         """Terminate a batch of processes, escalating to SIGKILL after a grace period.
 
@@ -595,24 +449,6 @@ class ChildMinder:
             self.logger.error(f"{e}; keeping the account disables and schedules last loaded")
             return self.user_control_state
 
-    def get_group_usage(self, username: str, group_name: str) -> float:
-        """Get current group usage in seconds"""
-        return self.group_usage.get(username, {}).get(group_name, 0)
-
-    def get_user_daily_limit(self, username: str) -> Optional[int]:
-        """Get user's daily screen time limit in seconds for today (weekday vs weekend)"""
-        minutes = cfg.user_daily_limit(self.config, username, datetime.now())
-        return None if minutes is None else minutes * 60
-
-    def get_user_daily_usage(self, username: str) -> float:
-        """Get current user daily usage in seconds"""
-        return self.user_daily_usage.get(username, 0)
-
-    def update_user_daily_usage(self, username: str, seconds: float):
-        """Increment user daily usage"""
-        self.user_daily_usage.setdefault(username, 0)
-        self.user_daily_usage[username] += seconds
-
     def end_user_session(self, username: str, reason: str):
         """End a user's desktop session, at most once per SESSION_END_INTERVAL.
 
@@ -628,16 +464,13 @@ class ChildMinder:
             return
 
         targets = []
-        for proc in psutil.process_iter(['pid', 'uids']):
-            try:
-                uids = proc.info['uids']
-                if uids is None or self.get_username(uids.real) != username:
-                    continue
-                if self.is_protected_process(proc):
-                    continue
-                targets.append((proc, reason))
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+        for proc in psutil.process_iter(['pid', 'uids', 'ppid']):
+            uids = proc.info['uids']
+            if uids is None or self.get_username(uids.real) != username:
                 continue
+            if self.is_protected_process(proc.info['pid'], proc.info['ppid']):
+                continue
+            targets.append((proc, reason))
         if not targets:
             return
         self.session_ended_at[username] = now
@@ -654,10 +487,10 @@ class ChildMinder:
 
         self.terminate_processes(targets)
 
-    def handle_disabled_user(self, username: str) -> bool:
-        """Handle a disabled user account - check for auto-restore or kill processes
+    def handle_disabled_user(self, username: str, end_session: bool = True) -> bool:
+        """Re-enable a disabled account whose time is up, or end its session.
 
-        Returns True if user was re-enabled, False otherwise.
+        Returns True if the account was re-enabled.
         """
         try:
             user_info = self.user_control_state["disabled_users"].get(username)
@@ -668,6 +501,8 @@ class ChildMinder:
                 self.logger.info(f"Timed disable expired for user {username}, re-enabling account")
                 if self.enable_user_account(username):
                     return True
+            if not end_session:
+                return False
 
             try:
                 uid = pwd.getpwnam(username).pw_uid
@@ -739,31 +574,33 @@ class ChildMinder:
         return sched is None or schedule.is_allowed(sched, datetime.now())
 
     def enforce_user_control(self):
-        """Enforce account disables and access-hour schedules.
+        """Apply account disables and access schedules, once per user_control.check_interval.
 
-        Throttled to user_control.check_interval so that a user outside their
-        allowed hours has their session ended periodically rather than having
-        every process signalled on every monitoring pass.
+        Throttled so that a user outside their allowed hours has their session
+        ended periodically rather than having every process signalled on every
+        monitoring pass. Expired timed disables are lifted whatever the
+        settings, since lifting a restriction must not depend on enforcement
+        being on; sessions are ended only while monitoring and user control
+        are both enabled.
         """
-        settings = self.config.get("user_control", {})
-        if not settings.get("enabled", False):
-            return
-
-        interval = settings.get("check_interval", 60)
+        settings = self.config["user_control"]
         now = time.monotonic()
         last = self.last_user_control_check
-        if last is not None and now - last < interval:
+        if last is not None and now - last < settings["check_interval"]:
             return
         self.last_user_control_check = now
 
         self.user_control_state = self.load_user_control_state()
+        enforcing = self.config["enabled"] and settings["enabled"]
 
         # Snapshot keys: handle_disabled_user can re-enable and remove entries
-        for username in list(self.user_control_state.get("disabled_users", {})):
-            self.handle_disabled_user(username)
+        for username in list(self.user_control_state["disabled_users"]):
+            self.handle_disabled_user(username, end_session=enforcing)
+        if not enforcing:
+            return
 
-        for username in self.user_control_state.get("daily_schedules", {}):
-            if username in self.user_control_state.get("disabled_users", {}):
+        for username in self.user_control_state["daily_schedules"]:
+            if username in self.user_control_state["disabled_users"]:
                 continue  # already handled above
             try:
                 uid = pwd.getpwnam(username).pw_uid
@@ -774,164 +611,70 @@ class ChildMinder:
             if not self.check_user_access_hours(username):
                 self.end_user_session(username, "outside allowed access hours")
 
+    def scan_processes(self) -> List[policy.Process]:
+        """List the running processes of monitored users"""
+        processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'uids', 'ppid']):
+            info = proc.info
+            uids, name = info['uids'], info['name']
+            if uids is None or not name:
+                continue
+            username = self.get_username(uids.real)
+            if not username or not self.should_monitor_user(username, uids.real):
+                continue
+            processes.append(policy.Process(
+                proc, name, username, self.is_protected_process(info['pid'], info['ppid'])))
+        return processes
+
     def monitor_processes(self, elapsed: float):
         """Run one monitoring pass, charging elapsed seconds against active limits"""
-        self.enforce_user_control()
-
-        to_terminate = []       # [(proc, reason)]
-        tracked = []            # [(proc, username, limit_key, group_name)]
-        active_users = set()
-        limited_keys = {}       # {(username, key): limit_seconds}
-        app_names = {}          # {(username, key): first process name seen}
-        monitored_keys = set()  # {(username, key)}
-        seen_groups = set()     # {(username, group)}
-        limited_groups = {}     # {(username, group): limit_seconds}
-
-        for proc in psutil.process_iter(['pid', 'name', 'uids']):
-            try:
-                pinfo = proc.info
-                uids = pinfo['uids']
-                process_name = pinfo['name']
-                if uids is None or not process_name:
-                    continue
-
-                username = self.get_username(uids.real)
-                if not username or not self.should_monitor_user(username, uids.real):
-                    continue
-
-                if self.is_process_blocked(process_name):
-                    if not self.is_protected_process(proc):
-                        to_terminate.append((proc, "Blocked application"))
-                    continue
-
-                group_name = self.get_process_group(process_name)
-                limit_key, limit_seconds = self.get_process_limit(process_name)
-                usage_key = limit_key or self.get_monitored_key(process_name)
-
-                if not group_name and not usage_key:
-                    continue
-
-                active_users.add(username)
-                if limit_key:
-                    limited_keys[(username, limit_key)] = limit_seconds
-                    app_names.setdefault((username, limit_key), process_name)
-                elif usage_key:
-                    monitored_keys.add((username, usage_key))
-                if group_name:
-                    seen_groups.add((username, group_name))
-                    group_limit = self.get_group_limit(group_name)
-                    if group_limit is not None:
-                        limited_groups[(username, group_name)] = group_limit
-
-                tracked.append((proc, username, limit_key, group_name))
-
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-            except Exception as e:
-                self.logger.error(f"Error inspecting process: {e}")
-
-        # Charge each user/key pair once per pass. Charging per process would
-        # multiply usage by the process count, and a browser runs dozens.
-        over_keys = set()
-        for (username, key), limit in limited_keys.items():
-            self.update_usage(username, key, elapsed)
-            usage = self.get_usage(username, key)
-            if usage >= limit:
-                over_keys.add((username, key))
-            else:
-                self.maybe_warn_process(username, key, app_names[(username, key)],
-                                        limit - usage)
-
-        for username, key in monitored_keys - set(limited_keys):
-            self.update_usage(username, key, elapsed)
-
-        for username, group_name in seen_groups:
-            self.update_group_usage(username, group_name, elapsed)
-
-        over_groups = set()
-        for (username, group_name), limit in limited_groups.items():
-            usage = self.get_group_usage(username, group_name)
-            if usage >= limit:
-                over_groups.add((username, group_name))
-            else:
-                self.maybe_warn_group(username, group_name, limit - usage)
-
-        for proc, username, limit_key, group_name in tracked:
-            try:
-                if self.is_protected_process(proc):
-                    continue
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-            if limit_key and (username, limit_key) in over_keys:
-                limit = limited_keys[(username, limit_key)]
-                to_terminate.append(
-                    (proc, f"Daily limit for '{limit_key}' exceeded ({limit/60:.0f} minutes)"))
-            elif group_name and (username, group_name) in over_groups:
-                limit = limited_groups[(username, group_name)]
-                to_terminate.append(
-                    (proc, f"Group '{group_name}' daily limit exceeded ({limit/60:.0f} minutes)"))
-
-        self.terminate_processes(to_terminate)
-
-        for username in active_users:
-            user_limit = self.get_user_daily_limit(username)
-            if user_limit is None:
-                continue
-            self.update_user_daily_usage(username, elapsed)
-            usage = self.get_user_daily_usage(username)
-            if usage >= user_limit:
-                self.end_user_session(
-                    username, f"daily screen time limit reached ({user_limit/60:.0f} minutes)")
-            else:
-                self.maybe_warn_user_daily(username, user_limit - usage)
+        actions = policy.evaluate(self.scan_processes(), self.config, self.usage,
+                                  elapsed, datetime.now())
+        for warning in actions.warnings:
+            self.deliver_warning(warning)
+        self.terminate_processes(actions.terminate)
+        for username, reason in actions.end_sessions:
+            self.end_user_session(username, reason)
 
     def log_usage_summary(self):
         """Log usage summary periodically"""
-        if not self.daily_usage and not self.group_usage and not self.user_daily_usage:
+        if self.usage.is_empty():
             return
 
         self.logger.info("=== Usage Summary ===")
+        now = datetime.now()
 
-        # Log individual process usage
-        if self.daily_usage:
+        def remaining(limit_seconds: Optional[float], seconds: float) -> str:
+            if limit_seconds is None:
+                return ""
+            return f" (Remaining: {max(0, (limit_seconds - seconds) / 60):.0f} minutes)"
+
+        if self.usage.processes:
             self.logger.info("Individual Process Usage:")
-            for user, processes in self.daily_usage.items():
-                for process, seconds in processes.items():
-                    minutes = seconds / 60
-                    limit_minutes = self.config.get("limited_processes", {}).get(process)
-                    if limit_minutes is not None:
-                        remaining = max(0, limit_minutes - minutes)
-                        self.logger.info(f"  User: {user}, Process: {process}, Time: {minutes:.1f} minutes (Remaining: {remaining:.0f} minutes)")
-                    else:
-                        self.logger.info(f"  User: {user}, Process: {process}, Time: {minutes:.1f} minutes")
+            for user, keys in self.usage.processes.items():
+                for key, seconds in keys.items():
+                    minutes = self.config["limited_processes"].get(key)
+                    limit = None if minutes is None else minutes * 60
+                    self.logger.info(f"  User: {user}, Process: {key}, "
+                                     f"Time: {seconds / 60:.1f} minutes{remaining(limit, seconds)}")
 
-        # Log group usage
-        if self.group_usage:
+        if self.usage.groups:
             self.logger.info("Group Usage:")
-            for user, groups in self.group_usage.items():
+            for user, groups in self.usage.groups.items():
                 for group, seconds in groups.items():
-                    minutes = seconds / 60
-                    limit = self.get_group_limit(group)
-                    if limit is not None:
-                        remaining = max(0, (limit - seconds) / 60)
-                        self.logger.info(f"  User: {user}, Group: {group}, Time: {minutes:.1f} minutes (Remaining: {remaining:.0f} minutes)")
-                    else:
-                        self.logger.info(f"  User: {user}, Group: {group}, Time: {minutes:.1f} minutes")
+                    limit = policy.group_limit(self.config, group)
+                    self.logger.info(f"  User: {user}, Group: {group}, "
+                                     f"Time: {seconds / 60:.1f} minutes{remaining(limit, seconds)}")
 
-        # Log user daily totals
-        if self.user_daily_usage:
+        if self.usage.daily:
             self.logger.info("User Daily Screen Time:")
-            for user, seconds in self.user_daily_usage.items():
-                minutes = seconds / 60
-                limit = self.get_user_daily_limit(user)
-                if limit is not None:
-                    remaining = max(0, (limit - seconds) / 60)
-                    self.logger.info(f"  User: {user}, Time: {minutes:.1f} minutes (Remaining: {remaining:.0f} minutes)")
-                else:
-                    self.logger.info(f"  User: {user}, Time: {minutes:.1f} minutes")
+            for user, seconds in self.usage.daily.items():
+                limit = policy.daily_limit(self.config, user, now)
+                self.logger.info(f"  User: {user}, "
+                                 f"Time: {seconds / 60:.1f} minutes{remaining(limit, seconds)}")
 
         self.logger.info("===================")
-        
+
     def run(self):
         """Main monitoring loop"""
         self.logger.info("Child Minder started")
@@ -949,23 +692,24 @@ class ChildMinder:
                     self.reset_requested = False
                     self.clear_usage("reset requested")
 
-                if not self.config.get("enabled", True):
-                    time.sleep(min(10, self.config.get('check_interval', 5)))
-                    last_tick = time.monotonic()
-                    continue
-
                 self.reset_daily_usage()
+                self.enforce_user_control()
+
+                now = time.monotonic()
+                if not self.config["enabled"]:
+                    last_tick = now
+                    time.sleep(min(10, self.config['check_interval']))
+                    continue
 
                 # Charge actual elapsed time rather than the configured interval,
                 # which ignores how long each pass takes. The cap keeps a stall
                 # or a resume from suspend from being counted as screen time.
-                now = time.monotonic()
                 elapsed = min(now - last_tick, self.config['check_interval'] * 2)
                 last_tick = now
 
                 self.monitor_processes(elapsed)
 
-                if now - last_summary >= self.config.get('usage_log_interval', 60):
+                if now - last_summary >= self.config['usage_log_interval']:
                     self.log_usage_summary()
                     last_summary = now
 
@@ -973,7 +717,7 @@ class ChildMinder:
                     self.save_state()
                     last_save = now
 
-                time.sleep(self.config.get('check_interval', 5))
+                time.sleep(self.config['check_interval'])
 
             except Exception as e:
                 self.logger.exception(f"Error in main loop: {e}")

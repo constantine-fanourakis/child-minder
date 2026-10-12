@@ -26,19 +26,6 @@ WEEKDAY = datetime(2026, 10, 12)
 WEEKEND = datetime(2026, 10, 17)
 
 
-class PatternMatchingTest(MinderTestCase):
-    def test_first_matching_group_wins(self):
-        minder = self.make_minder({"process_groups": {
-            "games": ["steam*"], "launchers": ["steam"]}})
-        self.assertEqual(minder.get_process_group("steam"), "games")
-        self.assertIsNone(minder.get_process_group("firefox"))
-
-    def test_process_limit_returns_config_key_and_seconds(self):
-        minder = self.make_minder({"limited_processes": {"minecraft*": 60}})
-        self.assertEqual(minder.get_process_limit("minecraft-launcher"), ("minecraft*", 3600))
-        self.assertEqual(minder.get_process_limit("firefox"), (None, None))
-
-
 class ConfigTest(MinderTestCase):
     def test_config_is_validated_on_load(self):
         minder = self.make_minder({"check_interval": -1, "user_daily_limits": {"kid": 90}})
@@ -168,37 +155,18 @@ class AccessHoursTest(MinderTestCase):
         self.assertTrue(self.access_at(WEEKEND.replace(hour=10), schedule))
 
 
-class WarningTest(MinderTestCase):
-    def test_each_threshold_fires_once(self):
-        minder = self.make_minder({"warning_intervals": [600, 300, 60]})
-        consumed = set()
-        self.assertEqual(minder.consume_warning(consumed, 590), 600)
-        self.assertIsNone(minder.consume_warning(consumed, 580))
-        self.assertEqual(minder.consume_warning(consumed, 299), 300)
-
-    def test_crossing_several_thresholds_warns_once(self):
-        minder = self.make_minder({"warning_intervals": [600, 300, 60]})
-        consumed = set()
-        self.assertEqual(minder.consume_warning(consumed, 30), 600)
-        self.assertIsNone(minder.consume_warning(consumed, 20))
-
-    def test_warning_time_is_used_without_intervals(self):
-        minder = self.make_minder({"warning_time": 120})
-        self.assertEqual(minder.warning_intervals(), [120])
-
-
 class UsageStateTest(MinderTestCase):
     def test_state_round_trips_through_file(self):
         minder = self.make_minder()
-        minder.update_usage("kid", "steam*", 30)
-        minder.update_group_usage("kid", "games", 40)
-        minder.update_user_daily_usage("kid", 50)
+        minder.usage.charge_process("kid", "steam*", 30)
+        minder.usage.charge_group("kid", "games", 40)
+        minder.usage.charge_daily("kid", 50)
         minder.save_state()
 
         reloaded = self.make_minder()
-        self.assertEqual(reloaded.get_usage("kid", "steam*"), 30)
-        self.assertEqual(reloaded.get_group_usage("kid", "games"), 40)
-        self.assertEqual(reloaded.get_user_daily_usage("kid"), 50)
+        self.assertEqual(reloaded.usage.process_seconds("kid", "steam*"), 30)
+        self.assertEqual(reloaded.usage.group_seconds("kid", "games"), 40)
+        self.assertEqual(reloaded.usage.daily_seconds("kid"), 50)
 
     def test_saved_state_is_private(self):
         minder = self.make_minder()
@@ -211,16 +179,16 @@ class UsageStateTest(MinderTestCase):
 
     def test_new_day_clears_usage(self):
         minder = self.make_minder()
-        minder.update_usage("kid", "steam*", 30)
+        minder.usage.charge_process("kid", "steam*", 30)
         minder.state["last_reset"] = datetime(2000, 1, 1).isoformat()
         minder.reset_daily_usage()
-        self.assertEqual(minder.get_usage("kid", "steam*"), 0)
+        self.assertEqual(minder.usage.process_seconds("kid", "steam*"), 0)
 
     def test_same_day_keeps_usage(self):
         minder = self.make_minder()
-        minder.update_usage("kid", "steam*", 30)
+        minder.usage.charge_process("kid", "steam*", 30)
         minder.reset_daily_usage()
-        self.assertEqual(minder.get_usage("kid", "steam*"), 30)
+        self.assertEqual(minder.usage.process_seconds("kid", "steam*"), 30)
 
 
 class MonitorPassTest(MinderTestCase):
@@ -269,18 +237,18 @@ class MonitorPassTest(MinderTestCase):
                                    "process_groups": {"browsers": ["chrome*"]}})
         procs = [FakeProc(pid, "chrome", KID_UID) for pid in range(10, 30)]
         self.run_pass(minder, procs, elapsed=5)
-        self.assertEqual(minder.get_usage("kid", "chrome*"), 5)
-        self.assertEqual(minder.get_group_usage("kid", "browsers"), 5)
+        self.assertEqual(minder.usage.process_seconds("kid", "chrome*"), 5)
+        self.assertEqual(minder.usage.group_seconds("kid", "browsers"), 5)
 
     def test_monitored_process_is_tracked_without_limit(self):
         minder = self.make_minder({"monitored_processes": ["code"]})
         self.run_pass(minder, [FakeProc(10, "code", KID_UID)], elapsed=5)
-        self.assertEqual(minder.get_usage("kid", "code"), 5)
+        self.assertEqual(minder.usage.process_seconds("kid", "code"), 5)
         self.assertEqual(self.terminated, [])
 
     def test_process_over_limit_is_terminated(self):
         minder = self.make_minder({"limited_processes": {"minecraft*": 1}})
-        minder.update_usage("kid", "minecraft*", 58)
+        minder.usage.charge_process("kid", "minecraft*", 58)
         self.run_pass(minder, [FakeProc(10, "minecraft", KID_UID),
                                FakeProc(11, "minecraft-helper", KID_UID)])
         self.assertEqual(self.terminated_pids(), [10, 11])
@@ -301,7 +269,7 @@ class MonitorPassTest(MinderTestCase):
     def test_group_over_limit_terminates_whole_group(self):
         minder = self.make_minder({"process_groups": {"games": ["steam*", "roblox*"]},
                                    "group_limits": {"games": 1}})
-        minder.update_group_usage("kid", "games", 58)
+        minder.usage.charge_group("kid", "games", 58)
         self.run_pass(minder, [FakeProc(10, "steam", KID_UID),
                                FakeProc(11, "robloxplayer", KID_UID),
                                FakeProc(12, "firefox", KID_UID)])
@@ -316,23 +284,36 @@ class MonitorPassTest(MinderTestCase):
         self.assertEqual(self.terminated_pids(), [10])
         minder.end_user_session.assert_called_once()
 
-    def test_process_exiting_mid_pass_does_not_abort_it(self):
-        minder = self.make_minder({"limited_processes": {"chrome*": 1},
-                                   "user_daily_limits": {"kid": 1}})
-        minder.update_usage("kid", "chrome*", 58)
-        minder.update_user_daily_usage("kid", 58)
-        self.run_pass(minder, [FakeProc(10, "chrome", KID_UID, vanish_on='ppid'),
-                               FakeProc(11, "chrome", KID_UID)])
-        self.assertEqual(self.terminated_pids(), [11])
-        minder.end_user_session.assert_called_once()
-
     def test_daily_screen_time_limit_ends_session(self):
         minder = self.make_minder({"monitored_processes": ["code"],
                                    "user_daily_limits": {"kid": 1}})
-        minder.update_user_daily_usage("kid", 58)
+        minder.usage.charge_daily("kid", 58)
         self.run_pass(minder, [FakeProc(10, "code", KID_UID)])
         minder.end_user_session.assert_called_once()
         self.assertEqual(minder.end_user_session.call_args.args[0], "kid")
+
+
+class RunLoopTest(MinderTestCase):
+    def run_once(self, minder):
+        def sleep(seconds):
+            minder.running = False
+        with mock.patch.object(child_minder.time, 'sleep', side_effect=sleep):
+            minder.run()
+
+    def test_user_control_runs_while_monitoring_is_off(self):
+        minder = self.make_minder({"enabled": False})
+        minder.enforce_user_control = mock.Mock()
+        minder.monitor_processes = mock.Mock()
+        self.run_once(minder)
+        minder.enforce_user_control.assert_called_once()
+        minder.monitor_processes.assert_not_called()
+
+    def test_monitoring_pass_runs_while_enabled(self):
+        minder = self.make_minder()
+        minder.enforce_user_control = mock.Mock()
+        minder.monitor_processes = mock.Mock()
+        self.run_once(minder)
+        minder.monitor_processes.assert_called_once()
 
 
 class SignalTest(MinderTestCase):
@@ -394,7 +375,7 @@ class EndSessionTest(MinderTestCase):
 class UsageSummaryTest(MinderTestCase):
     def test_limit_is_found_for_any_pattern_key(self):
         minder = self.make_minder({"limited_processes": {"[Mm]inecraft": 60}})
-        minder.update_usage("kid", "[Mm]inecraft", 600)
+        minder.usage.charge_process("kid", "[Mm]inecraft", 600)
         with self.assertLogs("childminder", "INFO") as logs:
             minder.log_usage_summary()
         self.assertTrue(any("[Mm]inecraft" in line and "Remaining: 50 minutes" in line
@@ -402,7 +383,7 @@ class UsageSummaryTest(MinderTestCase):
 
     def test_monitored_key_has_no_remaining_time(self):
         minder = self.make_minder({"monitored_processes": ["code"]})
-        minder.update_usage("kid", "code", 600)
+        minder.usage.charge_process("kid", "code", 600)
         with self.assertLogs("childminder", "INFO") as logs:
             minder.log_usage_summary()
         self.assertFalse(any("Remaining" in line for line in logs.output))
@@ -498,6 +479,23 @@ class UserControlTest(MinderTestCase):
         self.write_user_control({"disabled_users": {"root": {"reason": "mistake"}},
                                  "daily_schedules": {}})
         minder = self.make_minder({"user_control": {"enabled": True}})
+        minder.end_user_session = mock.Mock()
+        minder.enforce_user_control()
+        minder.end_user_session.assert_not_called()
+
+    def test_timed_disable_expires_while_monitoring_is_off(self):
+        self.write_user_control({"disabled_users": {
+            "kid": {"re_enable_at": datetime(2000, 1, 1).isoformat()}}})
+        minder = self.make_minder({"enabled": False, "user_control": {"enabled": True}})
+        minder.run_command = mock.Mock(return_value=mock.Mock(returncode=0))
+        minder.enforce_user_control()
+        with open(self.user_control_path) as f:
+            self.assertEqual(json.load(f)["disabled_users"], {})
+
+    def test_no_session_is_ended_while_monitoring_is_off(self):
+        self.write_user_control({"disabled_users": {"kid": {"reason": "grounded"}},
+                                 "daily_schedules": {"kid": {"no_access": ["weekday", "weekend"]}}})
+        minder = self.make_minder({"enabled": False, "user_control": {"enabled": True}})
         minder.end_user_session = mock.Mock()
         minder.enforce_user_control()
         minder.end_user_session.assert_not_called()

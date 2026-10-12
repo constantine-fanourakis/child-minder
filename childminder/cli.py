@@ -808,7 +808,7 @@ def main():
         epilog='Example: sudo cmctl enable')
     subparsers.add_parser('disable', help='Disable monitoring',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description='Disable the child-minder monitoring service entirely. While disabled, no time tracking or process termination will occur. Use "cmctl enable" to resume monitoring.',
+        description='Disable the child-minder monitoring service entirely. While disabled, no time tracking, process termination or session ending will occur, though timed account disables still expire on time. Use "cmctl enable" to resume monitoring.',
         epilog='''Example: sudo cmctl disable
 
 Note: To disable a specific user account instead, use "cmctl disable-user <username>"''')

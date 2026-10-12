@@ -79,7 +79,7 @@ class RealProcessTest(MinderTestCase):
         minder.emit_warning = lambda *args: None
 
         minder.monitor_processes(30)
-        self.assertEqual(minder.get_usage(current_username(), "cmtest-*"), 30)
+        self.assertEqual(minder.usage.process_seconds(current_username(), "cmtest-*"), 30)
         self.assertTrue(proc.is_running())
 
         minder.monitor_processes(30)

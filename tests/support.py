@@ -10,8 +10,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import psutil
-
 from childminder import cli as cmctl
 from childminder import config as cfg
 from childminder import daemon as child_minder
@@ -29,27 +27,12 @@ class FakeUids:
 
 
 class FakeProc:
-    """Stand-in for psutil.Process exposing what the daemon reads.
+    """Stand-in for psutil.Process exposing what the daemon reads"""
 
-    vanish_on names a method that raises NoSuchProcess, modelling a process
-    that exits between psutil.process_iter and a later call.
-    """
-
-    def __init__(self, pid: int, name: str, uid: int, ppid: int = 1,
-                 vanish_on: str = None):
+    def __init__(self, pid: int, name: str, uid: int, ppid: int = 1):
         self.pid = pid
-        self._ppid = ppid
         self._name = name
-        self._vanish_on = vanish_on
-        self.info = {'pid': pid, 'name': name, 'uids': FakeUids(uid)}
-
-    def _check(self, method: str):
-        if self._vanish_on == method:
-            raise psutil.NoSuchProcess(self.pid)
-
-    def ppid(self):
-        self._check('ppid')
-        return self._ppid
+        self.info = {'pid': pid, 'name': name, 'uids': FakeUids(uid), 'ppid': ppid}
 
     def name(self):
         return self._name
