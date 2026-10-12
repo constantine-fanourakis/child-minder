@@ -133,7 +133,10 @@ processes: `steam*` also covers `steamwebhelper`, and `chrome*` covers
 counter, so a browser running thirty processes still accrues time once.
 
 Patterns are never matched as substrings. An entry of `sh` matches only a
-process actually called `sh`, not `bash` or `zsh`.
+process actually called `sh`, not `bash` or `zsh`. Configurations written for
+releases that matched by substring may need a trailing `*` added; when
+updating, `install.sh` lists every pattern in the existing config that has no
+glob character.
 
 ### Example config
 

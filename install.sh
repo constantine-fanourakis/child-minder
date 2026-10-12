@@ -139,6 +139,28 @@ else
     chmod 600 /etc/child-minder/config.json.new
     echo "Existing configuration preserved."
     echo "New default config saved as /etc/child-minder/config.json.new for reference."
+
+    # Patterns once matched any process name containing them; without a glob
+    # character they now match only a name equal to the whole pattern.
+    python3 - /etc/child-minder/config.json <<'EOF' || true
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        config = json.load(f)
+    lists = [config.get("blocked_processes", []), config.get("monitored_processes", []),
+             list(config.get("limited_processes", {}))]
+    lists += list(config.get("process_groups", {}).values())
+except (OSError, ValueError, AttributeError, TypeError):
+    sys.exit(0)
+exact = sorted({p for patterns in lists for p in patterns
+                if isinstance(p, str) and not any(c in p for c in "*?[")})
+if exact:
+    print("")
+    print("Note: these patterns match a process name exactly, not as a substring:")
+    print("  " + ", ".join(exact))
+    print("Add a trailing * to any that should also match helper processes,")
+    print("for example steam* to catch steamwebhelper.")
+EOF
 fi
 
 # Usage data records what the monitored user has been running, so neither
