@@ -244,7 +244,65 @@ class ChildMinder:
             self.logger.warning("Invalid user_control check_interval, using default: 60")
             config['user_control']['check_interval'] = 60
 
+        self.validate_config_entries(config)
         return config
+
+    def validate_config_entries(self, config: dict):
+        """Drop individual entries that would make every monitoring pass raise.
+
+        Only the bad entry goes, with a warning, so one typo in a hand-edited
+        file leaves the rest of the configuration enforced.
+        """
+        def is_number(value) -> bool:
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+        def is_minutes(value) -> bool:
+            return is_number(value) and value >= 0
+
+        def valid_patterns(name: str, patterns: list) -> list:
+            kept = [p for p in patterns if isinstance(p, str)]
+            if len(kept) != len(patterns):
+                self.logger.warning(f"Ignoring non-string patterns in '{name}'")
+            return kept
+
+        for key in ('blocked_processes', 'monitored_processes'):
+            config[key] = valid_patterns(key, config[key])
+
+        for group, patterns in list(config['process_groups'].items()):
+            if isinstance(patterns, list):
+                config['process_groups'][group] = valid_patterns(
+                    f"process_groups.{group}", patterns)
+            else:
+                self.logger.warning(f"Ignoring invalid process_groups entry '{group}'")
+                del config['process_groups'][group]
+
+        for key in ('limited_processes', 'group_limits'):
+            for name, minutes in list(config[key].items()):
+                if not is_minutes(minutes):
+                    self.logger.warning(f"Ignoring invalid {key} entry '{name}'")
+                    del config[key][name]
+
+        for user, entry in list(config['user_daily_limits'].items()):
+            if is_minutes(entry):
+                continue
+            if isinstance(entry, dict) and all(
+                    entry.get(day) is None or is_minutes(entry.get(day))
+                    for day in ('weekday', 'weekend')):
+                continue
+            self.logger.warning(f"Ignoring invalid user_daily_limits entry '{user}'")
+            del config['user_daily_limits'][user]
+
+        intervals = config.get('warning_intervals')
+        if intervals is not None and not (
+                isinstance(intervals, list)
+                and all(is_number(w) and w > 0 for w in intervals)):
+            self.logger.warning("Invalid warning_intervals, using warning_time")
+            del config['warning_intervals']
+
+        for key, default in (('warning_time', 300), ('usage_log_interval', 60)):
+            if not is_number(config.get(key)) or config[key] <= 0:
+                self.logger.warning(f"Invalid {key}, using default: {default}")
+                config[key] = default
 
     def get_default_config(self) -> dict:
         """Return default configuration"""

@@ -80,6 +80,31 @@ class ConfigTest(MinderTestCase):
         self.assertEqual(minder.config["blocked_processes"], [])
         self.assertEqual(minder.config["group_limits"], {})
 
+    def test_invalid_nested_values_are_dropped(self):
+        minder = self.make_minder({
+            "blocked_processes": ["fortnite*", 7],
+            "monitored_processes": [None, "code"],
+            "process_groups": {"games": ["steam*", {}], "bad": "roblox*"},
+            "limited_processes": {"chrome*": "60", "minecraft*": 30, "x": True},
+            "group_limits": {"games": "120", "video": 0},
+            "user_daily_limits": {"kid": {"weekday": "60", "weekend": 120},
+                                  "kid2": [60], "kid3": 90,
+                                  "kid4": {"weekday": 0, "weekend": None}},
+            "warning_intervals": [300, "60"],
+            "warning_time": "300",
+            "usage_log_interval": None})
+        config = minder.config
+        self.assertEqual(config["blocked_processes"], ["fortnite*"])
+        self.assertEqual(config["monitored_processes"], ["code"])
+        self.assertEqual(config["process_groups"], {"games": ["steam*"]})
+        self.assertEqual(config["limited_processes"], {"minecraft*": 30})
+        self.assertEqual(config["group_limits"], {"video": 0})
+        self.assertEqual(config["user_daily_limits"],
+                         {"kid3": 90, "kid4": {"weekday": 0, "weekend": None}})
+        self.assertNotIn("warning_intervals", config)
+        self.assertEqual(config["warning_time"], 300)
+        self.assertEqual(config["usage_log_interval"], 60)
+
     def test_non_dict_user_control_falls_back(self):
         minder = self.make_minder({"user_control": None})
         self.assertEqual(minder.config["user_control"], {})
@@ -299,6 +324,13 @@ class MonitorPassTest(MinderTestCase):
         self.run_pass(minder, [FakeProc(10, "FortniteClient", KID_UID),
                                FakeProc(11, "firefox", KID_UID)])
         self.assertEqual(self.terminated_pids(), [10])
+
+    def test_bad_limit_value_does_not_stop_blocking(self):
+        minder = self.make_minder({"blocked_processes": ["bad"],
+                                   "process_groups": {"g": ["game"]},
+                                   "group_limits": {"g": "120"}})
+        self.run_pass(minder, [FakeProc(10, "game", KID_UID), FakeProc(11, "bad", KID_UID)])
+        self.assertEqual(self.terminated_pids(), [11])
 
     def test_unmonitored_users_are_ignored(self):
         minder = self.make_minder({"blocked_processes": ["fortnite*"]})
