@@ -1016,7 +1016,10 @@ class ChildMinder:
                 self.maybe_warn_group(username, group_name, limit - usage)
 
         for proc, username, limit_key, group_name in tracked:
-            if self.is_protected_process(proc):
+            try:
+                if self.is_protected_process(proc):
+                    continue
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
             if limit_key and (username, limit_key) in over_keys:
                 limit = limited_keys[(username, limit_key)]

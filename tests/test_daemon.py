@@ -282,6 +282,16 @@ class MonitorPassTest(MinderTestCase):
                                FakeProc(12, "firefox", KID_UID)])
         self.assertEqual(self.terminated_pids(), [10, 11])
 
+    def test_process_exiting_mid_pass_does_not_abort_it(self):
+        minder = self.make_minder({"limited_processes": {"chrome*": 1},
+                                   "user_daily_limits": {"kid": 1}})
+        minder.update_usage("kid", "chrome*", 58)
+        minder.update_user_daily_usage("kid", 58)
+        self.run_pass(minder, [FakeProc(10, "chrome", KID_UID, vanish_on='ppid'),
+                               FakeProc(11, "chrome", KID_UID)])
+        self.assertEqual(self.terminated_pids(), [11])
+        minder.end_user_session.assert_called_once()
+
     def test_daily_screen_time_limit_ends_session(self):
         minder = self.make_minder({"monitored_processes": ["code"],
                                    "user_daily_limits": {"kid": 1}})
