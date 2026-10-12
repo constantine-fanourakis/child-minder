@@ -452,6 +452,16 @@ python3 -m unittest
 The integration tests start and terminate a renamed copy of `sleep`, and are
 skipped when run as a user with a UID below 1000.
 
+The functional tests install the checkout into a throwaway Debian container
+running systemd and exercise the live service: limits, access hours, account
+disables, config fallback, and install and uninstall. They need Docker, run
+the container privileged, and take about four minutes:
+
+```bash
+tests/functional/run.sh                 # fresh install
+tests/functional/run.sh --from HEAD~5   # upgrade from an earlier revision
+```
+
 ## Uninstallation
 
 ```bash
