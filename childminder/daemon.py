@@ -252,7 +252,10 @@ class ChildMinder:
         the user.
         """
         minutes = warning.minutes
-        span = f"{minutes} minute{'s' if minutes != 1 else ''}"
+        if warning.remaining_seconds < 60:
+            span = "less than 1 minute"
+        else:
+            span = f"{minutes} minute{'s' if minutes != 1 else ''}"
         if warning.kind == "process":
             title = "Time Limit Warning" if minutes > 1 else "FINAL WARNING"
             message = f"{warning.subject} has {span} remaining today."
@@ -267,10 +270,10 @@ class ChildMinder:
             message = (f"You have {span} of screen time remaining today. "
                        f"All apps will close when time expires.")
             subject = "daily screen time limit"
-        self.emit_warning(warning.username, title, message, minutes, subject)
+        self.emit_warning(warning.username, title, message, minutes, span, subject)
 
     def emit_warning(self, username: str, title: str, message: str,
-                     minutes: int, subject: str):
+                     minutes: int, span: str, subject: str):
         """Deliver a time-limit warning over every channel appropriate to its urgency"""
         try:
             if minutes <= 2:
@@ -284,7 +287,7 @@ class ChildMinder:
             if minutes <= 2 or not delivered:
                 self.broadcast(f"{title}: {message}")
 
-            self.logger.info(f"Warned {username} about {subject} ({minutes} min remaining)")
+            self.logger.info(f"Warned {username} about {subject} ({span} remaining)")
         except Exception as e:
             self.logger.error(f"Error warning {username} about {subject}: {e}")
 

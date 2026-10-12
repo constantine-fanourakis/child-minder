@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 from unittest import mock
 
-from childminder import store
+from childminder import policy, store
 from tests.support import FakeProc, MinderTestCase, child_minder
 
 KID_UID = 1001
@@ -265,6 +265,21 @@ class MonitorPassTest(MinderTestCase):
                                FakeProc(11, "minecraft-helper", KID_UID)])
         message = minder.emit_warning.call_args.args[2]
         self.assertTrue(message.startswith("MinecraftLauncher has 5 minutes remaining"), message)
+
+    def test_warning_under_a_minute_says_less_than_one_minute(self):
+        minder = self.make_minder()
+        minder.emit_warning = mock.Mock()
+        minder.deliver_warning(policy.LimitWarning("daily", "kid", "", "", 30))
+        message, span = minder.emit_warning.call_args.args[2], minder.emit_warning.call_args.args[4]
+        self.assertTrue(message.startswith("You have less than 1 minute of screen time"), message)
+        self.assertEqual(span, "less than 1 minute")
+
+    def test_warning_of_exactly_a_minute_says_one_minute(self):
+        minder = self.make_minder()
+        minder.emit_warning = mock.Mock()
+        minder.deliver_warning(policy.LimitWarning("group", "kid", "games", "games", 60))
+        message = minder.emit_warning.call_args.args[2]
+        self.assertTrue(message.startswith("Group 'games' has 1 minute remaining"), message)
 
     def test_group_over_limit_terminates_whole_group(self):
         minder = self.make_minder({"process_groups": {"games": ["steam*", "roblox*"]},
