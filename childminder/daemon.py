@@ -21,6 +21,7 @@ import re
 
 from childminder import config as cfg
 from childminder import schedule
+from childminder import store
 
 # Default paths
 DEFAULT_CONFIG_PATH = "/etc/child-minder/config.json"
@@ -30,8 +31,6 @@ DEFAULT_LOG_PATH = "/var/log/child-minder/minder.log"
 # Copy of the last config that parsed, kept beside the state file and used when
 # the live config becomes unreadable
 LAST_GOOD_CONFIG_NAME = "config.last-good.json"
-# Account disables and access schedules written by cmctl, kept beside the state file
-USER_CONTROL_NAME = "user_control.json"
 
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
@@ -83,8 +82,9 @@ class ChildMinder:
         self.display_cache: Dict[str, Tuple[str, float]] = {}
         self.last_user_control_check: Optional[float] = None
 
-        # User control state file
-        self.user_control_file = self.state_path.parent / USER_CONTROL_NAME
+        # Account disables and access schedules, kept beside the state file
+        self.user_control = store.UserControlStore(self.state_path.parent / store.USER_CONTROL_NAME)
+        self.user_control_state = store.normalize_user_control({})
         self.user_control_state = self.load_user_control_state()
 
         self.running = True
@@ -161,7 +161,7 @@ class ChildMinder:
     def save_last_good_config(self, config: dict):
         """Keep a copy of a configuration that parsed cleanly"""
         try:
-            self.atomic_write_json(self.last_good_config_path, config)
+            store.atomic_write_json(self.last_good_config_path, config)
         except OSError as e:
             self.logger.warning(f"Could not save last known good config: {e}")
 
@@ -193,25 +193,10 @@ class ChildMinder:
             "last_reset": datetime.now().isoformat()
         }
 
-    @staticmethod
-    def atomic_write_json(path: Path, data: dict):
-        """Write JSON to path atomically, so a reader never sees a partial file"""
-        temp_file = path.with_name(path.name + '.tmp')
-        # Created 0600 whatever the umask: the rename replaces the original
-        # file, mode included, and none of these files are for the child. The
-        # fchmod covers a leftover temp file, whose mode O_CREAT keeps.
-        fd = os.open(temp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, 'w') as f:
-            json.dump(data, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        temp_file.replace(path)
-
     def save_state(self):
         """Save current state to file"""
         try:
-            self.atomic_write_json(self.state_path, {
+            store.atomic_write_json(self.state_path, {
                 "daily_usage": self.serialize_usage(),
                 "group_usage": self.group_usage,
                 "user_daily_usage": self.user_daily_usage,
@@ -602,18 +587,12 @@ class ChildMinder:
         return delivered
 
     def load_user_control_state(self) -> dict:
-        """Load user control state from file"""
+        """Load account disables and schedules, keeping the last good copy if unreadable"""
         try:
-            if self.user_control_file.exists():
-                with open(self.user_control_file, 'r') as f:
-                    return json.load(f)
-        except Exception as e:
-            self.logger.warning(f"Could not load user control state: {e}")
-
-        return {
-            "disabled_users": {},
-            "daily_schedules": {}
-        }
+            return self.user_control.load(self.logger.warning)
+        except store.StoreError as e:
+            self.logger.error(f"{e}; keeping the account disables and schedules last loaded")
+            return self.user_control_state
 
     def get_group_usage(self, username: str, group_name: str) -> float:
         """Get current group usage in seconds"""
@@ -680,18 +659,13 @@ class ChildMinder:
         Returns True if user was re-enabled, False otherwise.
         """
         try:
-            user_info = self.user_control_state.get("disabled_users", {}).get(username, {})
-            if not user_info:
+            user_info = self.user_control_state["disabled_users"].get(username)
+            if user_info is None:
                 return False
 
-            # Check if timed disable has expired
-            re_enable_at = user_info.get("re_enable_at")
-            if re_enable_at:
-                re_enable_time = datetime.fromisoformat(re_enable_at)
-                if datetime.now() >= re_enable_time:
-                    # Time has passed, re-enable the user
-                    self.logger.info(f"Timed disable expired for user {username}, re-enabling account")
-                    self.enable_user_account(username)
+            if store.disable_expired(user_info, datetime.now()):
+                self.logger.info(f"Timed disable expired for user {username}, re-enabling account")
+                if self.enable_user_account(username):
                     return True
 
             try:
@@ -725,48 +699,40 @@ class ChildMinder:
                 f"Command {' '.join(argv)} failed ({result.returncode}): {result.stderr.strip()}")
         return result
 
-    def enable_user_account(self, username: str):
-        """Re-enable a disabled user account"""
-        try:
-            # Clearing the expiry is what actually restores login; passwd -u is
-            # best effort because it refuses to unlock a passwordless account.
-            result = self.run_command(['usermod', '--expiredate', '', username])
-            if result is None or result.returncode != 0:
-                self.logger.error(f"Failed to clear account expiry for {username}, still disabled")
-                return
-            self.run_command(['passwd', '-u', username], check=False)
+    def enable_user_account(self, username: str) -> bool:
+        """Re-enable an account whose timed disable has expired, returning whether it was.
 
-            record = self.user_control_state.get("disabled_users", {}).get(username)
-            self.remove_disabled_record(username, record)
-            self.session_ended_at.pop(username, None)
-
-            self.logger.info(f"User account re-enabled: {username}")
-
-        except Exception as e:
-            self.logger.error(f"Error enabling user account {username}: {e}")
-
-    def remove_disabled_record(self, username: str, record: dict):
-        """Delete username's disabled_users entry from the file if it is still record.
-
-        The file is re-read rather than the snapshot loaded at the start of the
-        check written back, so a cmctl change made while usermod ran is kept,
-        including a fresh disable of the same user.
+        Runs under the user control lock, re-reading the record first: cmctl
+        takes the same lock to disable an account, so a disable made after
+        the check began is either seen here and kept, or made after this
+        unlock has finished.
         """
         try:
-            current = self.load_user_control_state()
-            if record and current.get("disabled_users", {}).get(username) == record:
-                del current["disabled_users"][username]
-                self.atomic_write_json(self.user_control_file, current)
-            self.user_control_state = current
-        except Exception as e:
-            self.logger.error(f"Error saving user control state: {e}")
+            with self.user_control.update(self.logger.warning) as data:
+                record = data["disabled_users"].get(username)
+                if record is None or not store.disable_expired(record, datetime.now()):
+                    return False
+                # Clearing the expiry is what actually restores login; passwd -u is
+                # best effort because it refuses to unlock a passwordless account.
+                result = self.run_command(['usermod', '--expiredate', '', username])
+                if result is None or result.returncode != 0:
+                    self.logger.error(f"Failed to clear account expiry for {username}, still disabled")
+                    return False
+                self.run_command(['passwd', '-u', username], check=False)
+                del data["disabled_users"][username]
+        except (store.StoreError, OSError) as e:
+            self.logger.error(f"Error re-enabling {username}: {e}")
+            return False
+
+        self.user_control_state = data
+        self.session_ended_at.pop(username, None)
+        self.logger.info(f"User account re-enabled: {username}")
+        return True
 
     def check_user_access_hours(self, username: str) -> bool:
         """Check whether a user's access schedule allows access now"""
-        raw = self.user_control_state.get("daily_schedules", {}).get(username)
-        if raw is None:
-            return True
-        return schedule.is_allowed(schedule.normalize(raw, self.logger.warning), datetime.now())
+        sched = self.user_control_state["daily_schedules"].get(username)
+        return sched is None or schedule.is_allowed(sched, datetime.now())
 
     def enforce_user_control(self):
         """Enforce account disables and access-hour schedules.

@@ -1,5 +1,6 @@
 """Tests for the cmctl command-line interface, run through its main()"""
 
+import fcntl
 import json
 import os
 import unittest
@@ -237,6 +238,26 @@ class AccountCommandTest(CmctlTestCase):
         out = self.run_cmctl("disable-user", "root")
         self.assertIn("system account", out)
         self.assertEqual(self.run_calls, [])
+
+    def test_account_is_expired_while_holding_the_user_control_lock(self):
+        lock_path = self.user_control_path.with_name("user_control.json.lock")
+        held = []
+
+        def fake_run_result(argv):
+            if argv[0] == 'usermod':
+                fd = os.open(lock_path, os.O_RDWR)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    held.append(False)
+                except BlockingIOError:
+                    held.append(True)
+                finally:
+                    os.close(fd)
+            return mock.Mock(returncode=0, stdout='', stderr='')
+        self.fake_run_result = fake_run_result
+        self.run_cmctl("disable-user", current_username(), "-t", "1")
+        self.run_cmctl("enable-user", current_username())
+        self.assertEqual(held, [True, True])
 
     def test_disable_unknown_user_is_refused(self):
         out = self.run_cmctl("disable-user", "no-such-user-cmtest")

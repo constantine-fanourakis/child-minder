@@ -3,9 +3,11 @@ Child Minder Management Utility (cmctl)
 Provides easy management and reporting for the Child Minder system
 """
 
+import copy
 import json
 import sys
 import argparse
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Optional
@@ -15,6 +17,8 @@ import pwd
 
 from childminder import config as cfg
 from childminder import schedule
+from childminder import store
+from childminder.store import atomic_write_json
 
 CONFIG_PATH = "/etc/child-minder/config.json"
 STATE_PATH = "/var/lib/child-minder/state.json"
@@ -33,26 +37,12 @@ def service_is_active() -> bool:
     return result.returncode == 0
 
 
-def atomic_write_json(path: Path, data: dict):
-    """Write JSON to path atomically, so the daemon never reads a partial file"""
-    temp_file = path.with_name(path.name + '.tmp')
-    # Created 0600 whatever the umask: the rename replaces the original
-    # file, mode included, and none of these files are for the child. The
-    # fchmod covers a leftover temp file, whose mode O_CREAT keeps.
-    fd = os.open(temp_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    os.fchmod(fd, 0o600)
-    with os.fdopen(fd, 'w') as f:
-        json.dump(data, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    temp_file.replace(path)
-
 class ChildMinderManager:
     def __init__(self):
         self.config_path = Path(CONFIG_PATH)
         self.state_path = Path(STATE_PATH)
         self.log_path = Path(LOG_PATH)
-        self.user_control_path = Path(USER_CONTROL_PATH)
+        self.user_control = store.UserControlStore(Path(USER_CONTROL_PATH))
         
     def load_config(self) -> dict:
         """Load the configuration file as written, for editing"""
@@ -458,28 +448,30 @@ class ChildMinderManager:
             if hours is not None:
                 disable_info["re_enable_at"] = (datetime.now() + timedelta(hours=hours)).isoformat()
 
-            # The record is saved before the account is expired, so a failure
-            # to save cannot leave an account locked that the daemon would
-            # never re-enable and user-status would not show.
-            user_control = self._load_user_control()
-            previous = user_control["disabled_users"].get(username)
-            user_control["disabled_users"][username] = disable_info
-            self._save_user_control(user_control)
-
-            # Expiring the account is what blocks every login path; a password
-            # lock alone leaves SSH keys and passwordless display manager
-            # sessions working.
-            result = subprocess.run(['usermod', '--expiredate', '1', username],
-                                    capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"Error: Failed to disable account: {result.stderr.strip()}")
-                if previous is None:
-                    del user_control["disabled_users"][username]
-                else:
-                    user_control["disabled_users"][username] = previous
+            # The lock keeps the daemon from re-enabling the account between
+            # the record and the expiry. The record is saved first, so a
+            # failure to save cannot leave an account locked that the daemon
+            # would never re-enable and user-status would not show.
+            with self.user_control.locked():
+                user_control = self._load_user_control()
+                previous = user_control["disabled_users"].get(username)
+                user_control["disabled_users"][username] = disable_info
                 self._save_user_control(user_control)
-                return
-            subprocess.run(['passwd', '-l', username], capture_output=True, text=True)
+
+                # Expiring the account is what blocks every login path; a password
+                # lock alone leaves SSH keys and passwordless display manager
+                # sessions working.
+                result = subprocess.run(['usermod', '--expiredate', '1', username],
+                                        capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(f"Error: Failed to disable account: {result.stderr.strip()}")
+                    if previous is None:
+                        del user_control["disabled_users"][username]
+                    else:
+                        user_control["disabled_users"][username] = previous
+                    self._save_user_control(user_control)
+                    return
+                subprocess.run(['passwd', '-l', username], capture_output=True, text=True)
 
             if hours is not None:
                 print(f"User {username} disabled for {hours} hours")
@@ -499,22 +491,21 @@ class ChildMinderManager:
     def enable_user_account(self, username: str):
         """Enable a user account"""
         try:
-            result = subprocess.run(['usermod', '--expiredate', '', username],
-                                    capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"Error: Failed to enable account: {result.stderr.strip()}")
-                return
+            with self._edit_user_control() as user_control:
+                result = subprocess.run(['usermod', '--expiredate', '', username],
+                                        capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(f"Error: Failed to enable account: {result.stderr.strip()}")
+                    return
 
-            # Best effort: passwd -u refuses to unlock an account that would be
-            # left passwordless, which does not stop the account from working.
-            unlock = subprocess.run(['passwd', '-u', username], capture_output=True, text=True)
-            if unlock.returncode != 0:
-                print(f"Note: password stayed locked ({unlock.stderr.strip()})")
+                # Best effort: passwd -u refuses to unlock an account that would be
+                # left passwordless, which does not stop the account from working.
+                unlock = subprocess.run(['passwd', '-u', username],
+                                        capture_output=True, text=True)
+                if unlock.returncode != 0:
+                    print(f"Note: password stayed locked ({unlock.stderr.strip()})")
 
-            user_control = self._load_user_control()
-            if username in user_control.get("disabled_users", {}):
-                del user_control["disabled_users"][username]
-                self._save_user_control(user_control)
+                user_control["disabled_users"].pop(username, None)
 
             print(f"User account enabled: {username}")
             
@@ -530,48 +521,51 @@ class ChildMinderManager:
         return {"start_hour": start_hour, "end_hour": end_hour}
 
     def _load_user_control(self) -> dict:
-        """Load user control state"""
-        defaults = {"disabled_users": {}, "daily_schedules": {}}
+        """Load account disables and schedules, exiting if the file is unusable"""
         try:
-            with open(self.user_control_path, 'r') as f:
-                user_control = json.load(f)
-        except FileNotFoundError:
-            return defaults
-        except PermissionError:
-            print(f"Error: Permission denied reading {self.user_control_path} (try: sudo cmctl ...)")
+            return self.user_control.load(lambda m: print(f"Warning: {m}"))
+        except store.StoreError as e:
+            hint = " (try: sudo cmctl ...)" if os.geteuid() != 0 else ""
+            print(f"Error: {e}{hint}")
             sys.exit(1)
-        except json.JSONDecodeError as e:
-            print(f"Error: Invalid JSON in user control file: {e}")
-            sys.exit(1)
-        # Ensure required keys exist
-        for key, default_value in defaults.items():
-            if key not in user_control:
-                user_control[key] = default_value
-        return user_control
 
     def _save_user_control(self, user_control: dict):
-        """Save user control state and enable user control in config"""
-        self.user_control_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(self.user_control_path, user_control)
+        """Save account disables and schedules; the caller holds the lock"""
+        self.user_control.path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(self.user_control.path, user_control)
+        self._enable_user_control()
 
-        # Enable user control in main config
+    def _enable_user_control(self):
+        """Turn on user control in the config, which the daemon needs to act on the file"""
         config = self.load_config()
-        if "user_control" not in config:
-            config["user_control"] = {}
-        config["user_control"]["enabled"] = True
+        control = config.get("user_control")
+        if not isinstance(control, dict):
+            control = config["user_control"] = {}
+        if control.get("enabled") is True:
+            return
+        control["enabled"] = True
         self.save_config(config)
+
+    @contextmanager
+    def _edit_user_control(self):
+        """Yield account disables and schedules under the lock, saving any change"""
+        with self.user_control.locked():
+            user_control = self._load_user_control()
+            before = copy.deepcopy(user_control)
+            yield user_control
+            if user_control != before:
+                self._save_user_control(user_control)
 
     def _user_schedule(self, user_control: dict, username: str) -> dict:
         """Return username's schedule in the current format, empty if there is none"""
         return schedule.normalize(user_control["daily_schedules"].get(username))
 
     def _store_schedule(self, user_control: dict, username: str, sched: dict):
-        """Save username's schedule, dropping it when it no longer restricts anything"""
+        """Store username's schedule, dropping it when it no longer restricts anything"""
         if schedule.is_empty(sched):
             user_control["daily_schedules"].pop(username, None)
         else:
             user_control["daily_schedules"][username] = sched
-        self._save_user_control(user_control)
 
     @staticmethod
     def _other_day(day: str) -> str:
@@ -586,104 +580,103 @@ class ChildMinderManager:
         window = self._window(start_hour, end_hour)
         if window is None:
             return
-        user_control = self._load_user_control()
-        sched = self._user_schedule(user_control, username)
-        schedule.set_window(sched, day, window)
-        fill_weekend = fill_empty_weekend and schedule.is_unrestricted(sched, "weekend")
-        if fill_weekend:
-            schedule.set_window(sched, "weekend", dict(window))
-        self._store_schedule(user_control, username, sched)
+        with self._edit_user_control() as user_control:
+            sched = self._user_schedule(user_control, username)
+            schedule.set_window(sched, day, window)
+            fill_weekend = fill_empty_weekend and schedule.is_unrestricted(sched, "weekend")
+            if fill_weekend:
+                schedule.set_window(sched, "weekend", dict(window))
+            self._store_schedule(user_control, username, sched)
 
-        days = "Mon-Fri" if day == "weekday" else "Sat-Sun"
-        other = self._other_day(day)
-        print(f"Set {day} access hours for {username}: "
-              f"{schedule.format_hour_range(start_hour, end_hour)}")
-        print(f"User will be automatically logged out outside these hours ({days})")
-        if fill_weekend:
-            print(f"Weekend (Sat-Sun) hours were unset and now match; change them with: "
-                  f"cmctl set-weekend-hours {username} START END")
-        elif schedule.is_unrestricted(sched, other):
-            print(f"{other.capitalize()} access is unrestricted; set it with: "
-                  f"cmctl set-{other}-hours {username} START END")
+            days = "Mon-Fri" if day == "weekday" else "Sat-Sun"
+            other = self._other_day(day)
+            print(f"Set {day} access hours for {username}: "
+                  f"{schedule.format_hour_range(start_hour, end_hour)}")
+            print(f"User will be automatically logged out outside these hours ({days})")
+            if fill_weekend:
+                print(f"Weekend (Sat-Sun) hours were unset and now match; change them with: "
+                      f"cmctl set-weekend-hours {username} START END")
+            elif schedule.is_unrestricted(sched, other):
+                print(f"{other.capitalize()} access is unrestricted; set it with: "
+                      f"cmctl set-{other}-hours {username} START END")
 
     def add_window(self, username: str, day: str, start_hour: int, end_hour: int):
         """Add an access window to a day type"""
         window = self._window(start_hour, end_hour)
         if window is None:
             return
-        user_control = self._load_user_control()
-        sched = self._user_schedule(user_control, username)
-        if not schedule.add_window(sched, day, window):
-            print(f"Window {schedule.format_hour_range(start_hour, end_hour)} "
-                  f"already exists for {day}s")
-            return
-        self._store_schedule(user_control, username, sched)
-        print(f"Added {day} window for {username}: "
-              f"{schedule.format_hour_range(start_hour, end_hour)}")
-        print(f"{day.capitalize()} windows: {schedule.format_windows(sched[day])}")
+        with self._edit_user_control() as user_control:
+            sched = self._user_schedule(user_control, username)
+            if not schedule.add_window(sched, day, window):
+                print(f"Window {schedule.format_hour_range(start_hour, end_hour)} "
+                      f"already exists for {day}s")
+                return
+            self._store_schedule(user_control, username, sched)
+            print(f"Added {day} window for {username}: "
+                  f"{schedule.format_hour_range(start_hour, end_hour)}")
+            print(f"{day.capitalize()} windows: {schedule.format_windows(sched[day])}")
 
     def remove_window(self, username: str, day: str, start_hour: int, end_hour: int):
         """Remove an access window from a day type"""
-        user_control = self._load_user_control()
-        if username not in user_control["daily_schedules"]:
-            print(f"No schedule found for user {username}")
-            return
-        sched = self._user_schedule(user_control, username)
-        window = {"start_hour": start_hour, "end_hour": end_hour}
-        if not schedule.remove_window(sched, day, window):
-            print(f"Window {schedule.format_hour_range(start_hour, end_hour)} "
-                  f"not found in {day} schedule")
-            return
-        self._store_schedule(user_control, username, sched)
-        print(f"Removed {day} window for {username}: "
-              f"{schedule.format_hour_range(start_hour, end_hour)}")
-        if sched[day]:
-            print(f"Remaining {day} windows: {schedule.format_windows(sched[day])}")
-        else:
-            print(f"No {day} windows remaining - {day} access is now unrestricted")
+        with self._edit_user_control() as user_control:
+            if username not in user_control["daily_schedules"]:
+                print(f"No schedule found for user {username}")
+                return
+            sched = self._user_schedule(user_control, username)
+            window = {"start_hour": start_hour, "end_hour": end_hour}
+            if not schedule.remove_window(sched, day, window):
+                print(f"Window {schedule.format_hour_range(start_hour, end_hour)} "
+                      f"not found in {day} schedule")
+                return
+            self._store_schedule(user_control, username, sched)
+            print(f"Removed {day} window for {username}: "
+                  f"{schedule.format_hour_range(start_hour, end_hour)}")
+            if sched[day]:
+                print(f"Remaining {day} windows: {schedule.format_windows(sched[day])}")
+            else:
+                print(f"No {day} windows remaining - {day} access is now unrestricted")
 
     def clear_windows(self, username: str, day: str):
         """Make a day type unrestricted"""
-        user_control = self._load_user_control()
-        sched = self._user_schedule(user_control, username)
-        label = day.capitalize()
-        if schedule.is_unrestricted(sched, day):
-            print(f"{label} access for {username} is already unrestricted")
-            return
-        schedule.clear(sched, day)
-        self._store_schedule(user_control, username, sched)
-        if schedule.is_empty(sched):
-            print(f"Cleared {day} windows for {username}; "
-                  f"access is now unrestricted at any time")
-        else:
-            other = self._other_day(day)
-            print(f"Cleared {day} windows for {username}; {day} access is now unrestricted")
-            print(f"{other.capitalize()} access: {schedule.format_day(sched, other)}")
+        with self._edit_user_control() as user_control:
+            sched = self._user_schedule(user_control, username)
+            label = day.capitalize()
+            if schedule.is_unrestricted(sched, day):
+                print(f"{label} access for {username} is already unrestricted")
+                return
+            schedule.clear(sched, day)
+            self._store_schedule(user_control, username, sched)
+            if schedule.is_empty(sched):
+                print(f"Cleared {day} windows for {username}; "
+                      f"access is now unrestricted at any time")
+            else:
+                other = self._other_day(day)
+                print(f"Cleared {day} windows for {username}; {day} access is now unrestricted")
+                print(f"{other.capitalize()} access: {schedule.format_day(sched, other)}")
 
     def deny_access(self, username: str, day: str):
         """Deny all access on a day type, replacing any windows it had"""
-        user_control = self._load_user_control()
-        sched = self._user_schedule(user_control, username)
-        if schedule.is_denied(sched, day):
-            print(f"{username} already has no {day} access")
-            return
-        schedule.deny(sched, day)
-        self._store_schedule(user_control, username, sched)
-        days = "Mon-Fri" if day == "weekday" else "Sat-Sun"
-        print(f"{username} now has no {day} access ({days}) and will be logged out")
-        print(f"Restore it with: cmctl set-{day}-hours {username} START END, "
-              f"or cmctl clear-{day}-windows {username} for unrestricted access")
+        with self._edit_user_control() as user_control:
+            sched = self._user_schedule(user_control, username)
+            if schedule.is_denied(sched, day):
+                print(f"{username} already has no {day} access")
+                return
+            schedule.deny(sched, day)
+            self._store_schedule(user_control, username, sched)
+            days = "Mon-Fri" if day == "weekday" else "Sat-Sun"
+            print(f"{username} now has no {day} access ({days}) and will be logged out")
+            print(f"Restore it with: cmctl set-{day}-hours {username} START END, "
+                  f"or cmctl clear-{day}-windows {username} for unrestricted access")
 
     def clear_user_hours(self, username: str):
         """Remove a user's access schedule entirely, allowing access at any time"""
-        user_control = self._load_user_control()
-        if username not in user_control["daily_schedules"]:
-            print(f"Access hours for {username} are already unrestricted")
-            return
-        del user_control["daily_schedules"][username]
-        self._save_user_control(user_control)
-        print(f"Cleared all access hours for {username}; "
-              f"access is now unrestricted at any time")
+        with self._edit_user_control() as user_control:
+            if username not in user_control["daily_schedules"]:
+                print(f"Access hours for {username} are already unrestricted")
+                return
+            del user_control["daily_schedules"][username]
+            print(f"Cleared all access hours for {username}; "
+                  f"access is now unrestricted at any time")
 
     def show_user_status(self, username: str = None):
         """Show user account status"""
