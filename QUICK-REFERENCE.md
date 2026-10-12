@@ -4,14 +4,14 @@
 
 ```bash
 # 1. Download all files to a directory
-# 2. Run installer
+# 2. Run installer (starts the service)
 sudo bash install.sh
 
 # 3. Configure
 sudo nano /etc/child-minder/config.json
 
-# 4. Start service
-sudo systemctl start child-minder
+# 4. Apply hand edits (cmctl changes reload automatically)
+sudo systemctl reload child-minder
 ```
 
 ## Service Management

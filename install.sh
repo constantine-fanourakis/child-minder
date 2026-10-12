@@ -187,11 +187,13 @@ systemctl daemon-reload
 echo "Enabling service..."
 systemctl enable child-minder.service
 
-if $IS_UPDATE; then
-    # Update complete - restart service
-    echo "Starting child-minder service..."
-    systemctl start child-minder
+# restart also starts a stopped service. A fresh install's default config
+# monitors only a placeholder user, so the running service does nothing until
+# it is configured.
+echo "Starting child-minder service..."
+systemctl restart child-minder
 
+if $IS_UPDATE; then
     echo ""
     echo "Update complete!"
     echo ""
@@ -206,13 +208,13 @@ if $IS_UPDATE; then
 else
     # Fresh install
     echo ""
-    echo "Installation complete!"
+    echo "Installation complete! The service is running."
     echo ""
     echo "Next steps:"
-    echo "1. Edit the configuration file: sudo nano /etc/child-minder/config.json"
-    echo "   - Add your child's username to 'monitored_users'"
-    echo "   - Configure blocked processes and time limits"
-    echo "2. Start the service: sudo systemctl start child-minder"
+    echo "1. Add your child's username: sudo cmctl add-user USERNAME"
+    echo "   and remove the placeholder: sudo cmctl remove-user son_username"
+    echo "2. Configure blocked processes and time limits with cmctl, or edit"
+    echo "   /etc/child-minder/config.json and run: sudo systemctl reload child-minder"
     echo "3. Check service status: sudo systemctl status child-minder"
     echo "4. View logs: sudo journalctl -u child-minder -f"
     echo ""

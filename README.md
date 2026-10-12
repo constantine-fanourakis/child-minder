@@ -41,7 +41,7 @@ cd /path/to/child-minder
 sudo bash install.sh
 ```
 
-The installer handles both fresh installs and updates (preserving your existing config). Tab completion for `cmctl` is installed automatically; open a new shell or run `source /etc/bash_completion.d/cmctl` to activate it. It installs:
+The installer handles both fresh installs and updates (preserving your existing config), and leaves the service enabled and running. Tab completion for `cmctl` is installed automatically; open a new shell or run `source /etc/bash_completion.d/cmctl` to activate it. It installs:
 
 - `/usr/lib/child-minder/` — main daemon, management utility and the `childminder` package they share
 - `/usr/bin/cmctl` and `/usr/bin/cmctl.py` — symlinks to the management utility
@@ -66,10 +66,9 @@ sudo cmctl group-limit games 120       # 2 hours total for all games
 # 4. Set access hours
 sudo cmctl set-weekday-hours johnny 15 21   # 3 PM - 9 PM on weekdays
 sudo cmctl set-weekend-hours johnny 9 22    # 9 AM - 10 PM on weekends
-
-# 5. Start the service
-sudo systemctl start child-minder
 ```
+
+The installer starts the service, and each `cmctl` change reloads it.
 
 ## Configuration Reference
 
