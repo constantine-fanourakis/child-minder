@@ -413,6 +413,17 @@ class MonitorPassTest(MinderTestCase):
         self.assertEqual(minder.end_user_session.call_args.args[0], "kid")
 
 
+class TerminalMessageTest(MinderTestCase):
+    def test_message_reaches_each_terminal_once(self):
+        tty = self.tmp / "tty"
+        tty.write_text("")
+        procs = [mock.Mock(info={'username': "kid", 'terminal': str(tty)}) for _ in range(2)]
+        minder = self.make_minder()
+        with mock.patch.object(child_minder.psutil, 'process_iter', return_value=procs):
+            self.assertTrue(minder.write_to_user_terminals("kid", "hello"))
+        self.assertEqual(tty.read_text().count("hello"), 1)
+
+
 class EndSessionTest(MinderTestCase):
     def end_session(self, procs):
         minder = self.make_minder()

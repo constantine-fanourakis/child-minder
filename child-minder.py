@@ -598,19 +598,22 @@ class ChildMinder:
 
     def write_to_user_terminals(self, username: str, message: str) -> bool:
         """Write a message directly to any terminals the user has open"""
-        written = False
+        terminals = set()
         try:
             for proc in psutil.process_iter(['username', 'terminal']):
-                try:
-                    if proc.info['username'] != username or not proc.info['terminal']:
-                        continue
-                    with open(f"/dev/{proc.info['terminal']}", 'w') as tty:
-                        tty.write(f"\n{message}\n\n")
-                    written = True
-                except (psutil.NoSuchProcess, psutil.AccessDenied, IOError, OSError):
-                    continue
+                if proc.info['username'] == username and proc.info['terminal']:
+                    terminals.add(proc.info['terminal'])
         except Exception as e:
-            self.logger.debug(f"Could not write to terminals for {username}: {e}")
+            self.logger.debug(f"Could not list terminals for {username}: {e}")
+
+        written = False
+        for terminal in terminals:
+            try:
+                with open(terminal, 'w') as tty:
+                    tty.write(f"\n{message}\n\n")
+                written = True
+            except OSError as e:
+                self.logger.debug(f"Could not write to {terminal}: {e}")
         return written
 
     def get_process_limit(self, process_name: str):
