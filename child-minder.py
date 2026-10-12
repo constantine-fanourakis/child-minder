@@ -134,13 +134,16 @@ class ChildMinder:
         """Read and validate one config file, raising ConfigError if unusable"""
         try:
             with open(path, 'r') as f:
-                return self.validate_config(json.load(f))
+                config = json.load(f)
         except FileNotFoundError:
             raise ConfigError(f"Config file not found at {path}")
         except json.JSONDecodeError as e:
             raise ConfigError(f"Invalid JSON in {path}: {e}")
         except OSError as e:
             raise ConfigError(f"Could not read {path}: {e}")
+        if not isinstance(config, dict):
+            raise ConfigError(f"{path} must contain a JSON object")
+        return self.validate_config(config)
 
     def load_config(self) -> dict:
         """Load configuration, falling back to the last copy that parsed.
@@ -212,7 +215,7 @@ class ChildMinder:
         for key, expected in (('monitored_users', list), ('blocked_processes', list),
                               ('monitored_processes', list), ('limited_processes', dict),
                               ('process_groups', dict), ('group_limits', dict),
-                              ('user_daily_limits', dict)):
+                              ('user_daily_limits', dict), ('user_control', dict)):
             if not isinstance(config.get(key), expected):
                 self.logger.warning(f"Invalid '{key}', using default")
                 config[key] = expected()

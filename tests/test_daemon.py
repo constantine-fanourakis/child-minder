@@ -79,6 +79,24 @@ class ConfigTest(MinderTestCase):
         self.assertEqual(minder.config["blocked_processes"], [])
         self.assertEqual(minder.config["group_limits"], {})
 
+    def test_non_dict_user_control_falls_back(self):
+        minder = self.make_minder({"user_control": None})
+        self.assertEqual(minder.config["user_control"], {})
+        minder.enforce_user_control()
+
+    def test_non_object_config_falls_back_to_last_good(self):
+        self.make_minder({"blocked_processes": ["x"]})
+        for content in ("[]", "null", "42"):
+            self.config_path.write_text(content)
+            minder = self.make_minder()
+            self.assertEqual(minder.config["blocked_processes"], ["x"])
+
+    def test_non_object_config_is_rejected_on_reload(self):
+        minder = self.make_minder({"blocked_processes": ["x"]})
+        self.config_path.write_text("[]")
+        minder.reload_config()
+        self.assertEqual(minder.config["blocked_processes"], ["x"])
+
     def test_successful_load_saves_last_good_copy(self):
         self.make_minder({"blocked_processes": ["x"]})
         with open(self.tmp / child_minder.LAST_GOOD_CONFIG_NAME) as f:
