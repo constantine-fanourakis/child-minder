@@ -385,6 +385,15 @@ class MonitorPassTest(MinderTestCase):
                                FakeProc(12, "firefox", KID_UID)])
         self.assertEqual(self.terminated_pids(), [10, 11])
 
+    def test_zero_limits_allow_no_time(self):
+        minder = self.make_minder({"process_groups": {"games": ["steam*"]},
+                                   "group_limits": {"games": 0},
+                                   "user_daily_limits": {"kid": {"weekday": 0, "weekend": 120}}})
+        with mock.patch.object(child_minder, 'datetime', frozen_datetime(WEEKDAY)):
+            self.run_pass(minder, [FakeProc(10, "steam", KID_UID)])
+        self.assertEqual(self.terminated_pids(), [10])
+        minder.end_user_session.assert_called_once()
+
     def test_process_exiting_mid_pass_does_not_abort_it(self):
         minder = self.make_minder({"limited_processes": {"chrome*": 1},
                                    "user_daily_limits": {"kid": 1}})

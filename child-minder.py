@@ -1091,7 +1091,7 @@ class ChildMinder:
                 if group_name:
                     seen_groups.add((username, group_name))
                     group_limit = self.get_group_limit(group_name)
-                    if group_limit:
+                    if group_limit is not None:
                         limited_groups[(username, group_name)] = group_limit
 
                 tracked.append((proc, username, limit_key, group_name))
@@ -1146,7 +1146,7 @@ class ChildMinder:
 
         for username in active_users:
             user_limit = self.get_user_daily_limit(username)
-            if not user_limit:
+            if user_limit is None:
                 continue
             self.update_user_daily_usage(username, elapsed)
             usage = self.get_user_daily_usage(username)
@@ -1170,7 +1170,7 @@ class ChildMinder:
                 for process, seconds in processes.items():
                     minutes = seconds / 60
                     limit_minutes = self.config.get("limited_processes", {}).get(process)
-                    if limit_minutes:
+                    if limit_minutes is not None:
                         remaining = max(0, limit_minutes - minutes)
                         self.logger.info(f"  User: {user}, Process: {process}, Time: {minutes:.1f} minutes (Remaining: {remaining:.0f} minutes)")
                     else:
@@ -1183,7 +1183,7 @@ class ChildMinder:
                 for group, seconds in groups.items():
                     minutes = seconds / 60
                     limit = self.get_group_limit(group)
-                    if limit:
+                    if limit is not None:
                         remaining = max(0, (limit - seconds) / 60)
                         self.logger.info(f"  User: {user}, Group: {group}, Time: {minutes:.1f} minutes (Remaining: {remaining:.0f} minutes)")
                     else:
@@ -1195,7 +1195,7 @@ class ChildMinder:
             for user, seconds in self.user_daily_usage.items():
                 minutes = seconds / 60
                 limit = self.get_user_daily_limit(user)
-                if limit:
+                if limit is not None:
                     remaining = max(0, (limit - seconds) / 60)
                     self.logger.info(f"  User: {user}, Time: {minutes:.1f} minutes (Remaining: {remaining:.0f} minutes)")
                 else:
