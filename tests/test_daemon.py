@@ -441,6 +441,39 @@ class UserControlTest(MinderTestCase):
         with open(self.user_control_path) as f:
             self.assertEqual(json.load(f)["disabled_users"], {})
 
+    def re_enable_while_cmctl_writes(self, cmctl_change):
+        """Expire kid's timed disable, applying cmctl_change to the file during usermod"""
+        record = {"re_enable_at": datetime(2000, 1, 1).isoformat()}
+        self.write_user_control({"disabled_users": {"kid": record}, "daily_schedules": {}})
+        minder = self.make_minder({"user_control": {"enabled": True}})
+
+        def run_command(argv, check=True):
+            if argv[0] == 'usermod':
+                with open(self.user_control_path) as f:
+                    data = json.load(f)
+                cmctl_change(data)
+                self.write_user_control(data)
+            return mock.Mock(returncode=0)
+        minder.run_command = run_command
+        minder.end_user_session = mock.Mock()
+        minder.enforce_user_control()
+        with open(self.user_control_path) as f:
+            return json.load(f)
+
+    def test_re_enable_keeps_concurrent_cmctl_change(self):
+        def add_schedule(data):
+            data["daily_schedules"]["kid2"] = {"weekday": [], "weekend": [],
+                                               "no_access": ["weekend"]}
+        data = self.re_enable_while_cmctl_writes(add_schedule)
+        self.assertEqual(data["disabled_users"], {})
+        self.assertIn("kid2", data["daily_schedules"])
+
+    def test_re_enable_keeps_a_new_disable_of_the_same_user(self):
+        def disable_again(data):
+            data["disabled_users"]["kid"] = {"reason": "grounded again"}
+        data = self.re_enable_while_cmctl_writes(disable_again)
+        self.assertEqual(data["disabled_users"], {"kid": {"reason": "grounded again"}})
+
     def test_disabled_account_has_session_ended(self):
         self.write_user_control({"disabled_users": {"kid": {"reason": "grounded"}},
                                  "daily_schedules": {}})

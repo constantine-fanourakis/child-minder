@@ -842,9 +842,8 @@ class ChildMinder:
                 return
             self.run_command(['passwd', '-u', username], check=False)
 
-            if username in self.user_control_state.get("disabled_users", {}):
-                del self.user_control_state["disabled_users"][username]
-                self.save_user_control_state()
+            record = self.user_control_state.get("disabled_users", {}).get(username)
+            self.remove_disabled_record(username, record)
             self.session_ended_at.pop(username, None)
 
             self.logger.info(f"User account re-enabled: {username}")
@@ -852,15 +851,19 @@ class ChildMinder:
         except Exception as e:
             self.logger.error(f"Error enabling user account {username}: {e}")
 
-    def save_user_control_state(self):
-        """Save the user control state to file"""
+    def remove_disabled_record(self, username: str, record: dict):
+        """Delete username's disabled_users entry from the file if it is still record.
+
+        The file is re-read rather than the snapshot loaded at the start of the
+        check written back, so a cmctl change made while usermod ran is kept,
+        including a fresh disable of the same user.
+        """
         try:
-            self.user_control_file.parent.mkdir(parents=True, exist_ok=True)
-            # Atomic write: write to temp file then rename
-            temp_file = self.user_control_file.with_suffix('.tmp')
-            with open(temp_file, 'w') as f:
-                json.dump(self.user_control_state, f, indent=2)
-            temp_file.rename(self.user_control_file)
+            current = self.load_user_control_state()
+            if record and current.get("disabled_users", {}).get(username) == record:
+                del current["disabled_users"][username]
+                self.atomic_write_json(self.user_control_file, current)
+            self.user_control_state = current
         except Exception as e:
             self.logger.error(f"Error saving user control state: {e}")
 
