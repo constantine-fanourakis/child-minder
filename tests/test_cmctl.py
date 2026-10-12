@@ -53,6 +53,22 @@ class UnreadableDataTest(CmctlTestCase):
         self.assertNotIn("Errno", out)
 
 
+    @unittest.skipIf(os.geteuid() == 0, "root can read a mode 000 directory")
+    def test_usage_reports_unreadable_state_even_if_exists_says_missing(self):
+        locked = self.tmp / "locked"
+        locked.mkdir()
+        state_path = locked / "state.json"
+        state_path.write_text("{}")
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o700)
+        self.euid = 1000
+        with mock.patch.object(cmctl, 'STATE_PATH', str(state_path)), \
+                mock.patch.object(cmctl.Path, 'exists', return_value=False):
+            out = self.run_cmctl("usage")
+        self.assertIn("Permission denied", out)
+        self.assertNotIn("No usage data", out)
+
+
 class ConfigCommandTest(CmctlTestCase):
     def test_block_and_unblock(self):
         self.run_cmctl("block", "steam*")

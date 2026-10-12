@@ -75,15 +75,16 @@ class ChildMinderManager:
     def load_state(self) -> dict:
         """Load current state"""
         try:
-            if self.state_path.exists():
-                with open(self.state_path, 'r') as f:
-                    state = json.load(f)
-                    # Ensure group_usage exists for backward compatibility
-                    if 'group_usage' not in state:
-                        state['group_usage'] = {}
-                    if 'user_daily_usage' not in state:
-                        state['user_daily_usage'] = {}
-                    return state
+            with open(self.state_path, 'r') as f:
+                state = json.load(f)
+                # Ensure group_usage exists for backward compatibility
+                if 'group_usage' not in state:
+                    state['group_usage'] = {}
+                if 'user_daily_usage' not in state:
+                    state['user_daily_usage'] = {}
+                return state
+        except FileNotFoundError:
+            pass
         except PermissionError:
             print(f"Error: Permission denied reading {self.state_path} (try: sudo cmctl ...)")
             sys.exit(1)
