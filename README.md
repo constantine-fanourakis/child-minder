@@ -410,6 +410,16 @@ A test script is included for validating the setup:
 sudo bash test-child-minder.sh
 ```
 
+The unit and integration tests run from a checkout, as a regular user, with
+nothing but the standard library and psutil:
+
+```bash
+python3 -m unittest
+```
+
+The integration tests start and terminate a renamed copy of `sleep`, and are
+skipped when run as a user with a UID below 1000.
+
 ## Uninstallation
 
 ```bash
