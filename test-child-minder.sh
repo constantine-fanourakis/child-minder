@@ -64,14 +64,14 @@ else
 fi
 
 # Test 4: Check if main script exists
-if test_feature "main script" '[ -f /usr/bin/child-minder.py ]'; then
+if test_feature "main script" '[ -f /usr/lib/child-minder/child-minder.py ] && [ -d /usr/lib/child-minder/childminder ]'; then
     PASSED=$((PASSED + 1))
 else
     FAILED=$((FAILED + 1))
 fi
 
 # Test 5: Check if management utility exists
-if test_feature "management utility" '[ -f /usr/bin/cmctl.py ]'; then
+if test_feature "management utility" '[ -x /usr/bin/cmctl ]'; then
     PASSED=$((PASSED + 1))
 else
     FAILED=$((FAILED + 1))

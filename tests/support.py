@@ -1,10 +1,5 @@
-"""Shared helpers for the child-minder test suite.
+"""Shared helpers for the child-minder test suite"""
 
-Both programs are scripts with hyphenated or unpackaged names, so they are
-loaded from their file paths rather than imported.
-"""
-
-import importlib.util
 import json
 import logging
 import os
@@ -17,21 +12,11 @@ from unittest import mock
 
 import psutil
 
-REPO = Path(__file__).resolve().parent.parent
-
-
-def load_script(module_name: str, filename: str):
-    spec = importlib.util.spec_from_file_location(module_name, REPO / filename)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-child_minder = load_script("child_minder", "child-minder.py")
-cmctl = load_script("cmctl", "cmctl.py")
+from childminder import cli as cmctl
+from childminder import daemon as child_minder
 
 # Keeps daemon records off stderr; assertLogs still captures them
-logging.getLogger("child_minder").addHandler(logging.NullHandler())
+logging.getLogger("childminder").addHandler(logging.NullHandler())
 
 
 class FakeUids:
@@ -105,7 +90,7 @@ class MinderTestCase(unittest.TestCase):
         self.addCleanup(lambda: [signal.signal(s, h) for s, h in handlers.items()])
 
         def setup_logging(minder):
-            minder.logger = logging.getLogger("child_minder")
+            minder.logger = logging.getLogger("childminder")
 
         with mock.patch.object(child_minder.ChildMinder, 'setup_logging', setup_logging):
             return child_minder.ChildMinder(

@@ -61,7 +61,7 @@ class RealProcessTest(MinderTestCase):
 
     def test_blocked_process_is_terminated(self):
         proc = self.spawn_detached()
-        with self.assertLogs("child_minder", "WARNING") as logs:
+        with self.assertLogs("childminder", "WARNING") as logs:
             self.blocking_minder().monitor_processes(5)
         self.assertFalse(proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE)
         self.assertTrue(any("Blocked application" in line for line in logs.output))

@@ -91,6 +91,7 @@ systemctl daemon-reload
 
 # Remove executable files
 echo "Removing executable files..."
+rm -rf /usr/lib/child-minder
 rm -f /usr/bin/child-minder.py
 rm -f /usr/bin/cmctl.py
 rm -f /usr/bin/cmctl

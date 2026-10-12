@@ -416,7 +416,7 @@ class MonitorPassTest(MinderTestCase):
 class SignalTest(MinderTestCase):
     def test_stop_signal_only_sets_a_flag(self):
         minder = self.make_minder()
-        with self.assertNoLogs("child_minder"):
+        with self.assertNoLogs("childminder"):
             minder.stop_handler(child_minder.signal.SIGTERM, None)
         self.assertFalse(minder.running)
 
@@ -445,14 +445,14 @@ class EndSessionTest(MinderTestCase):
         return minder
 
     def test_logged_out_user_is_left_alone_quietly(self):
-        with self.assertNoLogs("child_minder", "WARNING"):
+        with self.assertNoLogs("childminder", "WARNING"):
             minder = self.end_session([FakeProc(10, "bash", 1002)])
         minder.run_command.assert_not_called()
         minder.send_notification.assert_not_called()
         minder.terminate_processes.assert_not_called()
 
     def test_logged_in_user_has_session_ended(self):
-        with self.assertLogs("child_minder", "WARNING"):
+        with self.assertLogs("childminder", "WARNING"):
             minder = self.end_session([FakeProc(10, "bash", KID_UID),
                                        FakeProc(11, "firefox", KID_UID)])
         minder.run_command.assert_called_once_with(
@@ -473,7 +473,7 @@ class UsageSummaryTest(MinderTestCase):
     def test_limit_is_found_for_any_pattern_key(self):
         minder = self.make_minder({"limited_processes": {"[Mm]inecraft": 60}})
         minder.update_usage("kid", "[Mm]inecraft", 600)
-        with self.assertLogs("child_minder", "INFO") as logs:
+        with self.assertLogs("childminder", "INFO") as logs:
             minder.log_usage_summary()
         self.assertTrue(any("[Mm]inecraft" in line and "Remaining: 50 minutes" in line
                             for line in logs.output), logs.output)
@@ -481,7 +481,7 @@ class UsageSummaryTest(MinderTestCase):
     def test_monitored_key_has_no_remaining_time(self):
         minder = self.make_minder({"monitored_processes": ["code"]})
         minder.update_usage("kid", "code", 600)
-        with self.assertLogs("child_minder", "INFO") as logs:
+        with self.assertLogs("childminder", "INFO") as logs:
             minder.log_usage_summary()
         self.assertFalse(any("Remaining" in line for line in logs.output))
 

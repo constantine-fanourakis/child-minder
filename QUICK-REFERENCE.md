@@ -312,7 +312,7 @@ and every process matching one pattern shares a single time counter.
 - **Logs**: `/var/log/child-minder/minder.log` (rotates at 5 MB, 5 kept)
 - **Last good config**: `/var/lib/child-minder/config.last-good.json`
 - **Service**: `/etc/systemd/system/child-minder.service`
-- **Scripts**: `/usr/bin/child-minder.py`, `/usr/bin/cmctl.py`
+- **Program**: `/usr/lib/child-minder/` (`cmctl` is linked from `/usr/bin`)
 
 ## Safety Commands
 

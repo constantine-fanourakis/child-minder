@@ -19,7 +19,8 @@ fi
 
 # Detect if this is an update
 IS_UPDATE=false
-if [ -f /usr/bin/child-minder.py ] && [ -f /etc/child-minder/config.json ]; then
+if { [ -f /usr/lib/child-minder/child-minder.py ] || [ -f /usr/bin/child-minder.py ]; } \
+        && [ -f /etc/child-minder/config.json ]; then
     IS_UPDATE=true
     echo "Existing installation detected - performing update"
     echo ""
@@ -91,7 +92,7 @@ mkdir -p /var/lib/child-minder
 mkdir -p /var/log/child-minder
 
 # Check if all required files exist
-REQUIRED_FILES=("child-minder.py" "cmctl.py" "config.json" "child-minder.service")
+REQUIRED_FILES=("child-minder.py" "cmctl.py" "childminder/__init__.py" "config.json" "child-minder.service")
 for file in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$file" ]; then
         echo "Error: Required file '$file' not found in current directory"
@@ -108,14 +109,20 @@ fi
 
 # Copy files
 echo "Copying files..."
-cp child-minder.py /usr/bin/
-chmod +x /usr/bin/child-minder.py
+# The entry scripts and the childminder package they import live together;
+# Python resolves the /usr/bin symlinks and finds the package beside them.
+LIB_DIR=/usr/lib/child-minder
+rm -rf "$LIB_DIR"
+mkdir -p "$LIB_DIR/childminder"
+install -m 755 child-minder.py cmctl.py "$LIB_DIR/"
+install -m 644 childminder/*.py "$LIB_DIR/childminder/"
+# The service cannot write bytecode under its read-only /usr, so it is built here
+python3 -m compileall -q "$LIB_DIR"
 
-cp cmctl.py /usr/bin/
-chmod +x /usr/bin/cmctl.py
-
-# Create convenience symlink for cmctl
-ln -sf /usr/bin/cmctl.py /usr/bin/cmctl
+ln -sf "$LIB_DIR/cmctl.py" /usr/bin/cmctl
+ln -sf "$LIB_DIR/cmctl.py" /usr/bin/cmctl.py
+# The daemon runs from $LIB_DIR; remove a copy from the pre-package layout
+rm -f /usr/bin/child-minder.py
 
 # Install bash tab completion
 if [ -d /etc/bash_completion.d ]; then

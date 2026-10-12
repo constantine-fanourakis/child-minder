@@ -43,9 +43,8 @@ sudo bash install.sh
 
 The installer handles both fresh installs and updates (preserving your existing config). Tab completion for `cmctl` is installed automatically; open a new shell or run `source /etc/bash_completion.d/cmctl` to activate it. It installs:
 
-- `/usr/bin/child-minder.py` — main daemon
-- `/usr/bin/cmctl.py` — management utility
-- `/usr/bin/cmctl` — convenience symlink for `cmctl.py`
+- `/usr/lib/child-minder/` — main daemon, management utility and the `childminder` package they share
+- `/usr/bin/cmctl` and `/usr/bin/cmctl.py` — symlinks to the management utility
 - `/etc/child-minder/config.json` — configuration
 - `/etc/systemd/system/child-minder.service` — systemd unit
 
@@ -378,9 +377,10 @@ sudo tail -f /var/log/child-minder/minder.log   # Application log
 | `/var/lib/child-minder/state.json` | Usage/state data |
 | `/var/lib/child-minder/user_control.json` | User control state |
 | `/var/log/child-minder/minder.log` | Application log |
-| `/usr/bin/child-minder.py` | Main daemon |
-| `/usr/bin/cmctl.py` | Management utility |
-| `/usr/bin/cmctl` | Symlink to `cmctl.py` |
+| `/usr/lib/child-minder/child-minder.py` | Main daemon |
+| `/usr/lib/child-minder/cmctl.py` | Management utility |
+| `/usr/lib/child-minder/childminder/` | Python package shared by both |
+| `/usr/bin/cmctl`, `/usr/bin/cmctl.py` | Symlinks to the management utility |
 | `/etc/systemd/system/child-minder.service` | Systemd unit |
 
 ## Troubleshooting
