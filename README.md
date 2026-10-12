@@ -238,7 +238,7 @@ cmctl enable-user johnny                    # Re-enable account
 # Set hours (replaces all windows for that day type)
 cmctl set-weekday-hours johnny 15 21        # Mon-Fri: 3 PM - 9 PM
 cmctl set-weekend-hours johnny 9 22         # Sat-Sun: 9 AM - 10 PM
-cmctl set-user-hours johnny 8 21            # Alias for set-weekday-hours
+cmctl set-user-hours johnny 8 21            # Weekdays, and weekends if unset
 
 # Multiple time windows
 cmctl add-weekday-window johnny 7 8         # Add morning window (7-8 AM)

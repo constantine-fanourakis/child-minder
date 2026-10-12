@@ -222,6 +222,21 @@ class ScheduleCommandTest(CmctlTestCase):
         self.assertIn("Weekend access is unrestricted", out)
         self.assertTrue(self.read_json(self.config_path)["user_control"]["enabled"])
 
+    def test_set_user_hours_also_fills_an_unset_weekend(self):
+        self.run_cmctl("set-user-hours", "kid", "8", "21")
+        window = [{"start_hour": 8, "end_hour": 21}]
+        self.assertEqual(self.schedule(), {"weekday": window, "weekend": window})
+
+    def test_set_user_hours_keeps_a_set_or_denied_weekend(self):
+        self.run_cmctl("set-weekend-hours", "kid", "10", "22")
+        self.run_cmctl("set-user-hours", "kid", "8", "21")
+        self.assertEqual(self.schedule()["weekend"], [{"start_hour": 10, "end_hour": 22}])
+
+        self.run_cmctl("deny-weekend-access", "kid2")
+        self.run_cmctl("set-user-hours", "kid2", "8", "21")
+        self.assertEqual(self.schedule("kid2")["weekend"], [])
+        self.assertEqual(self.schedule("kid2")["no_access"], ["weekend"])
+
     def test_set_hours_replaces_existing_windows(self):
         self.run_cmctl("add-weekend-window", "kid", "9", "12")
         self.run_cmctl("add-weekend-window", "kid", "14", "18")

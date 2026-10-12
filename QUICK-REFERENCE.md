@@ -109,7 +109,7 @@ sudo cmctl set-weekday-hours johnny 15 21    # Mon-Fri: 3 PM - 9 PM
 # Set weekend hours (replaces all weekend windows)
 sudo cmctl set-weekend-hours johnny 9 22     # Sat-Sun: 9 AM - 10 PM
 
-# Legacy alias (same as set-weekday-hours)
+# Legacy command: sets weekday hours, and weekend hours if none are set
 sudo cmctl set-user-hours johnny 8 21
 
 # Add extra time windows (without replacing existing ones)

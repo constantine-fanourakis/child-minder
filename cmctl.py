@@ -680,8 +680,13 @@ class ChildMinderManager:
                 for w in weekend_windows:
                     print(f"{indent}    {self._format_hour_range(w['start_hour'], w['end_hour'])}")
 
-    def set_weekday_hours(self, username: str, start_hour: int, end_hour: int):
-        """Set allowed weekday (Mon-Fri) access hours for a user (replaces all windows)"""
+    def set_weekday_hours(self, username: str, start_hour: int, end_hour: int,
+                          fill_empty_weekend: bool = False):
+        """Set allowed weekday (Mon-Fri) access hours for a user (replaces all windows).
+
+        With fill_empty_weekend, a weekend with no windows that is not denied
+        gets the same window.
+        """
         try:
             if not self._validate_hours(start_hour, end_hour):
                 return
@@ -698,13 +703,20 @@ class ChildMinderManager:
             window = {"start_hour": start_hour, "end_hour": end_hour}
             schedule["weekday"] = [window]
             self._allow_day(schedule, "weekday")
+            fill_weekend = (fill_empty_weekend and not schedule.get("weekend")
+                            and not self._is_denied(schedule, "weekend"))
+            if fill_weekend:
+                schedule["weekend"] = [window.copy()]
 
             user_control["daily_schedules"][username] = schedule
             self._save_user_control(user_control)
 
             print(f"Set weekday access hours for {username}: {self._format_hour_range(start_hour, end_hour)}")
             print("User will be automatically logged out outside these hours (Mon-Fri)")
-            if not schedule.get("weekend") and not self._is_denied(schedule, "weekend"):
+            if fill_weekend:
+                print(f"Weekend (Sat-Sun) hours were unset and now match; change them with: "
+                      f"cmctl set-weekend-hours {username} START END")
+            elif not schedule.get("weekend") and not self._is_denied(schedule, "weekend"):
                 print(f"Weekend access is unrestricted; set it with: "
                       f"cmctl set-weekend-hours {username} START END")
 
@@ -962,8 +974,8 @@ class ChildMinderManager:
             print(f"Error clearing access hours: {e}")
 
     def set_user_hours(self, username: str, start_hour: int, end_hour: int):
-        """Set allowed access hours for a user (backward-compatible, sets weekday hours)"""
-        self.set_weekday_hours(username, start_hour, end_hour)
+        """Set weekday access hours, applying them to an unset weekend as well"""
+        self.set_weekday_hours(username, start_hour, end_hour, fill_empty_weekend=True)
     
     def show_user_status(self, username: str = None):
         """Show user account status"""
@@ -1125,8 +1137,9 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
     weekend_hours_parser.add_argument('start', type=int, help='Start hour (0-23)')
     weekend_hours_parser.add_argument('end', type=int, help='End hour (0-23)')
 
-    # Legacy command (alias for weekday)
-    user_hours_parser = subparsers.add_parser('set-user-hours', help='Set access hours (alias for set-weekday-hours)')
+    # Legacy command: weekday hours, also applied to an unset weekend
+    user_hours_parser = subparsers.add_parser(
+        'set-user-hours', help='Set weekday access hours, and weekend hours if unset')
     user_hours_parser.add_argument('username', help='Username')
     user_hours_parser.add_argument('start', type=int, help='Start hour (0-23)')
     user_hours_parser.add_argument('end', type=int, help='End hour (0-23)')
