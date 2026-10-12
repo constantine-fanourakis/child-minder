@@ -1,9 +1,11 @@
 """Tests for the cmctl command-line interface, run through its main()"""
 
 import json
+import os
+import unittest
 from unittest import mock
 
-from tests.support import CmctlTestCase, current_username
+from tests.support import CmctlTestCase, cmctl, current_username
 
 
 class PrivilegeTest(CmctlTestCase):
@@ -17,6 +19,38 @@ class PrivilegeTest(CmctlTestCase):
         self.euid = 1000
         out = self.run_cmctl("config")
         self.assertIn("Current Configuration", out)
+
+
+class UnreadableDataTest(CmctlTestCase):
+    """Data directories are root-only, so an unprivileged read must say so"""
+
+    def fake_run_result(self, argv):
+        if argv[0] == 'tail':
+            return mock.Mock(returncode=1, stdout='',
+                             stderr=f"tail: cannot open '{argv[-1]}' for reading: "
+                                    f"Permission denied")
+        return super().fake_run_result(argv)
+
+    def test_logs_reports_unreadable_log(self):
+        self.euid = 1000
+        out = self.run_cmctl("logs")
+        self.assertIn("Permission denied", out)
+        self.assertIn("sudo cmctl", out)
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a mode 000 directory")
+    def test_user_status_reports_unreadable_state(self):
+        locked = self.tmp / "locked"
+        locked.mkdir()
+        self.user_control_path = locked / "user_control.json"
+        self.user_control_path.write_text("{}")
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o700)
+        self.euid = 1000
+        with mock.patch.object(cmctl, 'USER_CONTROL_PATH', str(self.user_control_path)):
+            out = self.run_cmctl("user-status")
+        self.assertIn("Permission denied", out)
+        self.assertIn("sudo cmctl", out)
+        self.assertNotIn("Errno", out)
 
 
 class ConfigCommandTest(CmctlTestCase):

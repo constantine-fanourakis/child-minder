@@ -415,6 +415,9 @@ class ChildMinderManager:
         print(f"\n=== Last {lines} log entries ===")
         result = subprocess.run(['tail', '-n', str(lines), str(self.log_path)], 
                               capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error: {result.stderr.strip()} (try: sudo cmctl logs)")
+            return
         print(result.stdout)
         
     def enable_monitoring(self, enable: bool = True):
@@ -515,18 +518,21 @@ class ChildMinderManager:
         """Load user control state"""
         defaults = {"disabled_users": {}, "daily_schedules": {}}
         try:
-            if self.user_control_path.exists():
-                with open(self.user_control_path, 'r') as f:
-                    user_control = json.load(f)
-                # Ensure required keys exist
-                for key, default_value in defaults.items():
-                    if key not in user_control:
-                        user_control[key] = default_value
-                return user_control
+            with open(self.user_control_path, 'r') as f:
+                user_control = json.load(f)
+        except FileNotFoundError:
+            return defaults
+        except PermissionError:
+            print(f"Error: Permission denied reading {self.user_control_path} (try: sudo cmctl ...)")
+            sys.exit(1)
         except json.JSONDecodeError as e:
             print(f"Error: Invalid JSON in user control file: {e}")
             sys.exit(1)
-        return defaults
+        # Ensure required keys exist
+        for key, default_value in defaults.items():
+            if key not in user_control:
+                user_control[key] = default_value
+        return user_control
 
     def _save_user_control(self, user_control: dict):
         """Save user control state and enable user control in config"""

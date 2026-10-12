@@ -174,9 +174,11 @@ When both are set, **both are enforced** — whichever is reached first triggers
 
 ## Management Utility (`cmctl`)
 
-Commands that change configuration or account state require `sudo`; the
+Commands that change configuration or account state require `sudo`. The
 read-only commands (`config`, `usage`, `status`, `logs`, `groups`,
-`user-status`) do not. You can use either `cmctl` or `cmctl.py`.
+`user-status`) are not refused without it, but the configuration, usage data
+and logs they read are readable only by root, so on a standard install only
+`status` works without `sudo`. You can use either `cmctl` or `cmctl.py`.
 
 ### View information
 
