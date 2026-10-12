@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 import pwd
 import subprocess
 import re
+import socket
 
 from childminder import accounts
 from childminder import config as cfg
@@ -49,6 +50,22 @@ SOUND_FILES = [
     '/usr/share/sounds/ubuntu/stereo/dialog-warning.ogg',
     '/usr/share/sounds/gnome/default/alerts/glass.ogg',
 ]
+
+
+def notify_systemd(message: str):
+    """Send a state change such as READY=1 to systemd, when run as a notify service.
+
+    The protocol is one datagram on the Unix socket named by NOTIFY_SOCKET,
+    where a leading @ names an abstract socket.
+    """
+    path = os.environ.get('NOTIFY_SOCKET')
+    if not path:
+        return
+    if path.startswith('@'):
+        path = '\0' + path[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+        sock.connect(path)
+        sock.sendall(message.encode())
 
 
 class ChildMinder:
@@ -681,6 +698,13 @@ class ChildMinder:
     def run(self):
         """Main monitoring loop"""
         self.logger.info("Child Minder started")
+        # Until READY=1, systemd holds reload jobs and reports the unit as
+        # activating, so no SIGHUP or SIGUSR1 can arrive before the handlers
+        # installed in __init__, while the signal would still kill the process.
+        try:
+            notify_systemd("READY=1")
+        except OSError as e:
+            self.logger.error(f"Could not notify systemd that the service is ready: {e}")
 
         last_summary = time.monotonic()
         last_save = time.monotonic()

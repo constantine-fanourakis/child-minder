@@ -3,7 +3,10 @@ Description=Child Minder - Process Monitor and Control Service
 After=network.target
 
 [Service]
-Type=simple
+# The daemon reports READY=1 once its signal handlers are installed; before
+# that, the SIGHUP of a reload would terminate it.
+Type=notify
+NotifyAccess=main
 User=root
 Group=root
 ExecStart=/usr/bin/python3 /usr/lib/child-minder/child-minder.py

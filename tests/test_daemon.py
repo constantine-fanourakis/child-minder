@@ -3,6 +3,8 @@
 import fcntl
 import json
 import os
+import socket
+import unittest
 from datetime import datetime
 from unittest import mock
 
@@ -329,6 +331,34 @@ class RunLoopTest(MinderTestCase):
         minder.monitor_processes = mock.Mock()
         self.run_once(minder)
         minder.monitor_processes.assert_called_once()
+
+
+    def test_run_reports_ready_to_systemd(self):
+        minder = self.make_minder()
+        minder.enforce_user_control = mock.Mock()
+        minder.monitor_processes = mock.Mock()
+        path = str(self.tmp / "notify")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.bind(path)
+            with mock.patch.dict(os.environ, {"NOTIFY_SOCKET": path}):
+                self.run_once(minder)
+            self.assertEqual(sock.recv(64), b"READY=1")
+
+
+class NotifySystemdTest(unittest.TestCase):
+    def test_abstract_socket(self):
+        name = f"child-minder-test-{os.getpid()}"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.bind("\0" + name)
+            with mock.patch.dict(os.environ, {"NOTIFY_SOCKET": "@" + name}):
+                child_minder.notify_systemd("READY=1")
+            self.assertEqual(sock.recv(64), b"READY=1")
+
+    def test_does_nothing_outside_systemd(self):
+        with mock.patch.dict(os.environ, clear=True), \
+                mock.patch.object(child_minder.socket, 'socket') as sock:
+            child_minder.notify_systemd("READY=1")
+        sock.assert_not_called()
 
 
 class SignalTest(MinderTestCase):
