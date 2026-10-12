@@ -102,7 +102,7 @@ class ChildMinder:
 
         self.session_ended_at: Dict[str, float] = {}
         self.display_cache: Dict[str, Tuple[str, float]] = {}
-        self.last_user_control_check = 0.0
+        self.last_user_control_check: Optional[float] = None
 
         # User control state file
         self.user_control_file = self.state_path.parent / USER_CONTROL_NAME
@@ -1023,7 +1023,8 @@ class ChildMinder:
 
         interval = settings.get("check_interval", 60)
         now = time.monotonic()
-        if now - self.last_user_control_check < interval:
+        last = self.last_user_control_check
+        if last is not None and now - last < interval:
             return
         self.last_user_control_check = now
 

@@ -524,6 +524,15 @@ class UserControlTest(MinderTestCase):
         minder.end_user_session.assert_called_once()
         self.assertIn("grounded", minder.end_user_session.call_args.args[1])
 
+    def test_first_check_runs_soon_after_boot(self):
+        self.write_user_control({"disabled_users": {"kid": {"reason": "grounded"}},
+                                 "daily_schedules": {}})
+        minder = self.make_minder({"user_control": {"enabled": True, "check_interval": 60}})
+        minder.end_user_session = mock.Mock()
+        with mock.patch.object(child_minder.time, 'monotonic', return_value=15.0):
+            minder.enforce_user_control()
+        minder.end_user_session.assert_called_once()
+
     def test_user_control_disabled_in_config_does_nothing(self):
         self.write_user_control({"disabled_users": {"kid": {}}, "daily_schedules": {}})
         minder = self.make_minder()
