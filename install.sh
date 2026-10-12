@@ -140,8 +140,8 @@ else
     echo "Existing configuration preserved."
     echo "New default config saved as /etc/child-minder/config.json.new for reference."
 
-    # Patterns once matched any process name containing them; without a glob
-    # character they now match only a name equal to the whole pattern.
+    # A pattern without a glob character matches only a process name equal to
+    # the whole pattern, so list those in case one was meant as a prefix.
     python3 - /etc/child-minder/config.json <<'EOF' || true
 import json, sys
 try:
