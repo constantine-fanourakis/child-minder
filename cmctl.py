@@ -452,6 +452,9 @@ class ChildMinderManager:
     def disable_user_account(self, username: str, reason: str = "Administrative action",
                             hours: Optional[float] = None):
         """Disable a user account"""
+        if hours is not None and not 0 < hours < float("inf"):
+            print("Error: Duration must be a positive number of hours")
+            return
         try:
             try:
                 uid = pwd.getpwnam(username).pw_uid
@@ -482,7 +485,7 @@ class ChildMinderManager:
                 "disabled_by": os.environ.get("SUDO_USER") or pwd.getpwuid(os.geteuid()).pw_name
             }
             
-            if hours:
+            if hours is not None:
                 re_enable_time = datetime.now() + timedelta(hours=hours)
                 disable_info["re_enable_at"] = re_enable_time.isoformat()
                 print(f"User {username} disabled for {hours} hours")

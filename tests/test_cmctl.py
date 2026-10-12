@@ -185,6 +185,13 @@ class AccountCommandTest(CmctlTestCase):
         self.assertEqual(self.run_calls, [])
         self.assertFalse(self.user_control_path.exists())
 
+    def test_non_positive_duration_is_refused(self):
+        for hours in ("0", "0.0", "-1", "nan", "inf"):
+            out = self.run_cmctl("disable-user", current_username(), "-t", hours)
+            self.assertIn("must be a positive number", out)
+        self.assertEqual(self.run_calls, [])
+        self.assertFalse(self.user_control_path.exists())
+
     def test_disable_unknown_user_is_refused(self):
         out = self.run_cmctl("disable-user", "no-such-user-cmtest")
         self.assertIn("does not exist", out)
