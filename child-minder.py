@@ -930,9 +930,15 @@ class ChildMinder:
         for username in list(self.user_control_state.get("disabled_users", {})):
             self.handle_disabled_user(username)
 
-        for username in self.config.get("monitored_users", []):
+        for username in self.user_control_state.get("daily_schedules", {}):
             if username in self.user_control_state.get("disabled_users", {}):
                 continue  # already handled above
+            try:
+                uid = pwd.getpwnam(username).pw_uid
+            except KeyError:
+                continue
+            if not self.should_monitor_user(username, uid):
+                continue
             if not self.check_user_access_hours(username):
                 self.end_user_session(username, "outside allowed access hours")
 

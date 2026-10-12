@@ -332,13 +332,42 @@ class UserControlTest(MinderTestCase):
         minder.enforce_user_control()
         minder.end_user_session.assert_not_called()
 
-    def test_listed_user_outside_hours_has_session_ended(self):
+    def enforce_schedule_at(self, moment: datetime, monitored_users: list):
+        """Enforce kid's 15-20 weekday schedule at moment, returning the end_user_session mock"""
         self.write_user_control({"disabled_users": {}, "daily_schedules": {
             "kid": {"weekday": [{"start_hour": 15, "end_hour": 20}], "weekend": []}}})
         minder = self.make_minder({"user_control": {"enabled": True},
-                                   "monitored_users": ["kid"]})
+                                   "monitored_users": monitored_users})
+        minder.end_user_session = mock.Mock()
+        accounts = {"kid": mock.Mock(pw_uid=KID_UID)}
+        with mock.patch.object(child_minder, 'datetime', frozen_datetime(moment)), \
+                mock.patch.object(child_minder.pwd, 'getpwnam',
+                                  side_effect=lambda name: accounts[name]):
+            minder.enforce_user_control()
+        return minder.end_user_session
+
+    def test_listed_user_outside_hours_has_session_ended(self):
+        ended = self.enforce_schedule_at(WEEKDAY.replace(hour=9), ["kid"])
+        ended.assert_called_once_with("kid", "outside allowed access hours")
+
+    def test_schedule_applies_when_every_user_is_monitored(self):
+        ended = self.enforce_schedule_at(WEEKDAY.replace(hour=9), [])
+        ended.assert_called_once_with("kid", "outside allowed access hours")
+
+    def test_schedule_ignored_for_unmonitored_user(self):
+        ended = self.enforce_schedule_at(WEEKDAY.replace(hour=9), ["someone_else"])
+        ended.assert_not_called()
+
+    def test_user_inside_hours_keeps_session(self):
+        ended = self.enforce_schedule_at(WEEKDAY.replace(hour=16), [])
+        ended.assert_not_called()
+
+    def test_schedule_for_unknown_account_is_skipped(self):
+        self.write_user_control({"disabled_users": {}, "daily_schedules": {
+            "no-such-user-cmtest": {"weekday": [{"start_hour": 15, "end_hour": 20}]}}})
+        minder = self.make_minder({"user_control": {"enabled": True}})
         minder.end_user_session = mock.Mock()
         with mock.patch.object(child_minder, 'datetime',
                                frozen_datetime(WEEKDAY.replace(hour=9))):
             minder.enforce_user_control()
-        minder.end_user_session.assert_called_once_with("kid", "outside allowed access hours")
+        minder.end_user_session.assert_not_called()
