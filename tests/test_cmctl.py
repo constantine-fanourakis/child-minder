@@ -179,6 +179,12 @@ class AccountCommandTest(CmctlTestCase):
         self.assertIn(['usermod', '--expiredate', '', user], self.run_calls)
         self.assertEqual(self.read_json(self.user_control_path)["disabled_users"], {})
 
+    def test_disable_system_account_is_refused(self):
+        out = self.run_cmctl("disable-user", "root")
+        self.assertIn("system account", out)
+        self.assertEqual(self.run_calls, [])
+        self.assertFalse(self.user_control_path.exists())
+
     def test_disable_unknown_user_is_refused(self):
         out = self.run_cmctl("disable-user", "no-such-user-cmtest")
         self.assertIn("does not exist", out)

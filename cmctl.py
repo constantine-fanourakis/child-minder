@@ -18,6 +18,8 @@ CONFIG_PATH = "/etc/child-minder/config.json"
 STATE_PATH = "/var/lib/child-minder/state.json"
 LOG_PATH = "/var/log/child-minder/minder.log"
 USER_CONTROL_PATH = "/var/lib/child-minder/user_control.json"
+LOGIN_DEFS_PATH = "/etc/login.defs"
+DEFAULT_UID_MAX = 60000
 
 SERVICE = "child-minder"
 
@@ -29,6 +31,19 @@ def service_is_active() -> bool:
     """Check whether the child-minder service is currently running"""
     result = subprocess.run(['systemctl', 'is-active', '--quiet', SERVICE], check=False)
     return result.returncode == 0
+
+
+def read_uid_max(path: str = LOGIN_DEFS_PATH) -> int:
+    """Return the highest UID for regular users, from login.defs if it sets one"""
+    try:
+        with open(path) as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) >= 2 and fields[0] == "UID_MAX":
+                    return int(fields[1])
+    except (OSError, ValueError):
+        pass
+    return DEFAULT_UID_MAX
 
 
 def atomic_write_json(path: Path, data: dict):
@@ -439,9 +454,14 @@ class ChildMinderManager:
         """Disable a user account"""
         try:
             try:
-                pwd.getpwnam(username)
+                uid = pwd.getpwnam(username).pw_uid
             except KeyError:
                 print(f"Error: User {username} does not exist")
+                return
+            # The daemon never acts on system accounts, and expiring one such
+            # as root can lock the administrator out.
+            if not self.load_config().get("min_uid", 1000) <= uid <= read_uid_max():
+                print(f"Error: {username} is a system account and cannot be disabled")
                 return
 
             # Expiring the account is what blocks every login path; a password

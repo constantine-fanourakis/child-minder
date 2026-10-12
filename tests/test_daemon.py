@@ -468,6 +468,14 @@ class UsageSummaryTest(MinderTestCase):
 
 
 class UserControlTest(MinderTestCase):
+    def setUp(self):
+        super().setUp()
+        accounts = {"kid": mock.Mock(pw_uid=KID_UID), "root": mock.Mock(pw_uid=0)}
+        patcher = mock.patch.object(child_minder.pwd, 'getpwnam',
+                                    side_effect=lambda name: accounts[name])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_expired_timed_disable_re_enables_account(self):
         self.write_user_control({"disabled_users": {"kid": {
             "re_enable_at": datetime(2000, 1, 1).isoformat()}}, "daily_schedules": {}})
@@ -532,6 +540,14 @@ class UserControlTest(MinderTestCase):
         with mock.patch.object(child_minder.time, 'monotonic', return_value=15.0):
             minder.enforce_user_control()
         minder.end_user_session.assert_called_once()
+
+    def test_disabled_system_account_is_left_alone(self):
+        self.write_user_control({"disabled_users": {"root": {"reason": "mistake"}},
+                                 "daily_schedules": {}})
+        minder = self.make_minder({"user_control": {"enabled": True}})
+        minder.end_user_session = mock.Mock()
+        minder.enforce_user_control()
+        minder.end_user_session.assert_not_called()
 
     def test_user_control_disabled_in_config_does_nothing(self):
         self.write_user_control({"disabled_users": {"kid": {}}, "daily_schedules": {}})

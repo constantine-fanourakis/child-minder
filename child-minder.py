@@ -415,15 +415,19 @@ class ChildMinder:
         except KeyError:
             return None
             
-    def should_monitor_user(self, username: str, uid: int) -> bool:
-        """Check if user should be monitored.
+    def is_regular_account(self, uid: int) -> bool:
+        """Check that uid is a regular user, between min_uid and UID_MAX.
 
-        System accounts are never monitored regardless of configuration: the
-        daemon terminates processes as root, and an empty monitored_users list
-        means "every human user", not "init and the kernel threads too".
-        Accounts above UID_MAX are system accounts as well.
+        Nothing the daemon does as root may target any other account: an
+        empty monitored_users list means "every human user", not "init and
+        the kernel threads too", and a disabled root would have every root
+        process killed. Accounts above UID_MAX are system accounts as well.
         """
-        if uid < self.config.get("min_uid", 1000) or uid > self.max_uid:
+        return self.config.get("min_uid", 1000) <= uid <= self.max_uid
+
+    def should_monitor_user(self, username: str, uid: int) -> bool:
+        """Check if user should be monitored; system accounts never are"""
+        if not self.is_regular_account(uid):
             return False
         monitored_users = self.config.get("monitored_users", [])
         if not monitored_users:  # If empty, monitor all non-system users
@@ -864,6 +868,13 @@ class ChildMinder:
                     self.logger.info(f"Timed disable expired for user {username}, re-enabling account")
                     self.enable_user_account(username)
                     return True
+
+            try:
+                uid = pwd.getpwnam(username).pw_uid
+            except KeyError:
+                return False
+            if not self.is_regular_account(uid):
+                return False
 
             self.end_user_session(username, f"account disabled ({user_info.get('reason', 'no reason given')})")
             return False
