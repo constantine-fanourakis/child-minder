@@ -17,6 +17,7 @@ import pwd
 CONFIG_PATH = "/etc/child-minder/config.json"
 STATE_PATH = "/var/lib/child-minder/state.json"
 LOG_PATH = "/var/log/child-minder/minder.log"
+USER_CONTROL_PATH = "/var/lib/child-minder/user_control.json"
 
 SERVICE = "child-minder"
 
@@ -44,7 +45,7 @@ class ChildMinderManager:
         self.config_path = Path(CONFIG_PATH)
         self.state_path = Path(STATE_PATH)
         self.log_path = Path(LOG_PATH)
-        self.user_control_path = Path("/var/lib/child-minder/user_control.json")
+        self.user_control_path = Path(USER_CONTROL_PATH)
         
     def load_config(self) -> dict:
         """Load current configuration"""

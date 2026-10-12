@@ -29,6 +29,8 @@ DEFAULT_LOG_PATH = "/var/log/child-minder/minder.log"
 # Copy of the last config that parsed, kept beside the state file and used when
 # the live config becomes unreadable
 LAST_GOOD_CONFIG_NAME = "config.last-good.json"
+# Account disables and access schedules written by cmctl, kept beside the state file
+USER_CONTROL_NAME = "user_control.json"
 
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
@@ -84,7 +86,7 @@ class ChildMinder:
         self.last_user_control_check = 0.0
 
         # User control state file
-        self.user_control_file = Path("/var/lib/child-minder/user_control.json")
+        self.user_control_file = self.state_path.parent / USER_CONTROL_NAME
         self.user_control_state = self.load_user_control_state()
 
         self.running = True
