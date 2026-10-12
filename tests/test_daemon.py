@@ -426,7 +426,9 @@ class UserControlTest(MinderTestCase):
 
         minder.enforce_user_control()
 
-        minder.run_command.assert_any_call(['usermod', '--expiredate', '', 'kid'])
+        minder.run_command.assert_any_call(
+            child_minder.accounts.SYSTEMD_RUN + ['usermod', '--expiredate', '', 'kid'],
+            check=False)
         minder.end_user_session.assert_not_called()
         with open(self.user_control_path) as f:
             self.assertEqual(json.load(f)["disabled_users"], {})

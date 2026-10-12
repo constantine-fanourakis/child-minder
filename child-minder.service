@@ -21,9 +21,9 @@ PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-# /etc is writable because re-enabling a timed account disable runs usermod,
-# which rewrites the shadow database and takes lock files alongside it.
-ReadWritePaths=/var/lib/child-minder /var/log/child-minder /etc
+# Account changes run through systemd-run as transient units outside this
+# sandbox, so /etc stays read-only here.
+ReadWritePaths=/var/lib/child-minder /var/log/child-minder
 
 [Install]
 WantedBy=multi-user.target

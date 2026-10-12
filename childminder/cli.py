@@ -15,6 +15,7 @@ import os
 import subprocess
 import pwd
 
+from childminder import accounts
 from childminder import config as cfg
 from childminder import schedule
 from childminder import store
@@ -29,6 +30,10 @@ SERVICE = "child-minder"
 
 # Commands that only read state and so do not need root
 READ_ONLY_COMMANDS = {"config", "usage", "status", "logs", "groups", "user-status"}
+
+
+def run_command(argv: list) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True)
 
 
 def service_is_active() -> bool:
@@ -458,20 +463,15 @@ class ChildMinderManager:
                 user_control["disabled_users"][username] = disable_info
                 self._save_user_control(user_control)
 
-                # Expiring the account is what blocks every login path; a password
-                # lock alone leaves SSH keys and passwordless display manager
-                # sessions working.
-                result = subprocess.run(['usermod', '--expiredate', '1', username],
-                                        capture_output=True, text=True)
-                if result.returncode != 0:
-                    print(f"Error: Failed to disable account: {result.stderr.strip()}")
+                error = accounts.lock(username, run_command)
+                if error:
+                    print(f"Error: Failed to disable account: {error}")
                     if previous is None:
                         del user_control["disabled_users"][username]
                     else:
                         user_control["disabled_users"][username] = previous
                     self._save_user_control(user_control)
                     return
-                subprocess.run(['passwd', '-l', username], capture_output=True, text=True)
 
             if hours is not None:
                 print(f"User {username} disabled for {hours} hours")
@@ -492,18 +492,12 @@ class ChildMinderManager:
         """Enable a user account"""
         try:
             with self._edit_user_control() as user_control:
-                result = subprocess.run(['usermod', '--expiredate', '', username],
-                                        capture_output=True, text=True)
-                if result.returncode != 0:
-                    print(f"Error: Failed to enable account: {result.stderr.strip()}")
+                error, note = accounts.unlock(username, run_command)
+                if error:
+                    print(f"Error: Failed to enable account: {error}")
                     return
-
-                # Best effort: passwd -u refuses to unlock an account that would be
-                # left passwordless, which does not stop the account from working.
-                unlock = subprocess.run(['passwd', '-u', username],
-                                        capture_output=True, text=True)
-                if unlock.returncode != 0:
-                    print(f"Note: password stayed locked ({unlock.stderr.strip()})")
+                if note:
+                    print(f"Note: password stayed locked ({note})")
 
                 user_control["disabled_users"].pop(username, None)
 

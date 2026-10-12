@@ -19,6 +19,7 @@ import pwd
 import subprocess
 import re
 
+from childminder import accounts
 from childminder import config as cfg
 from childminder import schedule
 from childminder import store
@@ -699,6 +700,10 @@ class ChildMinder:
                 f"Command {' '.join(argv)} failed ({result.returncode}): {result.stderr.strip()}")
         return result
 
+    def run_outside_sandbox(self, argv: list):
+        """Run a command as a transient systemd unit, outside this service's sandbox"""
+        return self.run_command(accounts.SYSTEMD_RUN + argv, check=False)
+
     def enable_user_account(self, username: str) -> bool:
         """Re-enable an account whose timed disable has expired, returning whether it was.
 
@@ -712,13 +717,12 @@ class ChildMinder:
                 record = data["disabled_users"].get(username)
                 if record is None or not store.disable_expired(record, datetime.now()):
                     return False
-                # Clearing the expiry is what actually restores login; passwd -u is
-                # best effort because it refuses to unlock a passwordless account.
-                result = self.run_command(['usermod', '--expiredate', '', username])
-                if result is None or result.returncode != 0:
-                    self.logger.error(f"Failed to clear account expiry for {username}, still disabled")
+                error, note = accounts.unlock(username, self.run_outside_sandbox)
+                if error:
+                    self.logger.error(f"Failed to re-enable {username}, still disabled: {error}")
                     return False
-                self.run_command(['passwd', '-u', username], check=False)
+                if note:
+                    self.logger.info(f"Password for {username} stayed locked: {note}")
                 del data["disabled_users"][username]
         except (store.StoreError, OSError) as e:
             self.logger.error(f"Error re-enabling {username}: {e}")
