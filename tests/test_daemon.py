@@ -337,6 +337,43 @@ class MonitorPassTest(MinderTestCase):
         self.assertEqual(minder.end_user_session.call_args.args[0], "kid")
 
 
+class EndSessionTest(MinderTestCase):
+    def end_session(self, procs):
+        minder = self.make_minder()
+        minder.get_username = lambda uid: {KID_UID: "kid"}.get(uid)
+        minder.run_command = mock.Mock()
+        minder.send_notification = mock.Mock()
+        minder.write_to_user_terminals = mock.Mock()
+        minder.terminate_processes = mock.Mock()
+        with mock.patch.object(child_minder.psutil, 'process_iter', return_value=procs):
+            minder.end_user_session("kid", "outside allowed access hours")
+        return minder
+
+    def test_logged_out_user_is_left_alone_quietly(self):
+        with self.assertNoLogs("child_minder", "WARNING"):
+            minder = self.end_session([FakeProc(10, "bash", 1002)])
+        minder.run_command.assert_not_called()
+        minder.send_notification.assert_not_called()
+        minder.terminate_processes.assert_not_called()
+
+    def test_logged_in_user_has_session_ended(self):
+        with self.assertLogs("child_minder", "WARNING"):
+            minder = self.end_session([FakeProc(10, "bash", KID_UID),
+                                       FakeProc(11, "firefox", KID_UID)])
+        minder.run_command.assert_called_once_with(
+            ['loginctl', 'terminate-user', 'kid'], check=False)
+        minder.send_notification.assert_called_once()
+        targets = minder.terminate_processes.call_args.args[0]
+        self.assertEqual(sorted(p.pid for p, _ in targets), [10, 11])
+
+    def test_repeat_within_interval_is_throttled(self):
+        minder = self.end_session([FakeProc(10, "bash", KID_UID)])
+        with mock.patch.object(child_minder.psutil, 'process_iter',
+                               return_value=[FakeProc(10, "bash", KID_UID)]):
+            minder.end_user_session("kid", "again")
+        minder.run_command.assert_called_once()
+
+
 class UserControlTest(MinderTestCase):
     def test_expired_timed_disable_re_enables_account(self):
         self.write_user_control({"disabled_users": {"kid": {

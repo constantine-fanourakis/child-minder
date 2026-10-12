@@ -737,11 +737,26 @@ class ChildMinder:
         Throttled because the conditions that call it (a disabled account, time
         outside the allowed window, an exhausted daily limit) stay true until
         the next daily reset. Signalling every process on every pass would stop
-        the user from staying logged in long enough to read why.
+        the user from staying logged in long enough to read why. A user with no
+        processes has nothing to end, so nothing is logged or attempted.
         """
         now = time.monotonic()
         last = self.session_ended_at.get(username, 0)
         if last and now - last < SESSION_END_INTERVAL:
+            return
+
+        targets = []
+        for proc in psutil.process_iter(['pid', 'uids']):
+            try:
+                uids = proc.info['uids']
+                if uids is None or self.get_username(uids.real) != username:
+                    continue
+                if self.is_protected_process(proc):
+                    continue
+                targets.append((proc, reason))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if not targets:
             return
         self.session_ended_at[username] = now
 
@@ -755,17 +770,6 @@ class ChildMinder:
         # processes such as a detached screen or a lingering user service.
         self.run_command(['loginctl', 'terminate-user', username], check=False)
 
-        targets = []
-        for proc in psutil.process_iter(['pid', 'uids']):
-            try:
-                uids = proc.info['uids']
-                if uids is None or self.get_username(uids.real) != username:
-                    continue
-                if self.is_protected_process(proc):
-                    continue
-                targets.append((proc, reason))
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
         self.terminate_processes(targets)
 
     def handle_disabled_user(self, username: str) -> bool:
