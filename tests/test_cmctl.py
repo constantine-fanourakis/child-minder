@@ -94,10 +94,37 @@ class ConfigCommandTest(CmctlTestCase):
             os.umask(old_umask)
         self.assertEqual(os.stat(self.config_path).st_mode & 0o777, 0o600)
 
-    def test_non_positive_limit_is_rejected(self):
-        out = self.run_cmctl("limit", "minecraft*", "0")
-        self.assertIn("must be a positive number", out)
-        self.assertNotIn("limited_processes", self.read_json(self.config_path))
+    def test_negative_limit_is_rejected(self):
+        for command in (("limit", "minecraft*"), ("group-limit", "games"),
+                        ("user-limit", "kid")):
+            out = self.run_cmctl(*command, "-5")
+            self.assertIn("zero or more", out)
+        config = self.read_json(self.config_path)
+        for key in ("limited_processes", "group_limits", "user_daily_limits"):
+            self.assertNotIn(key, config)
+
+    def test_zero_limit_is_saved_and_shown(self):
+        self.run_cmctl("add-to-group", "games", "steam*")
+        self.run_cmctl("group-limit", "games", "0")
+        self.run_cmctl("user-weekday-limit", "kid", "0")
+        config = self.read_json(self.config_path)
+        self.assertEqual(config["group_limits"], {"games": 0})
+        self.assertEqual(config["user_daily_limits"], {"kid": {"weekday": 0}})
+        out = self.run_cmctl("config")
+        self.assertIn("games (0 min/day)", out)
+        self.assertIn("kid: weekday: 0 min", out)
+
+    def test_usage_shows_remaining_time_under_a_zero_limit(self):
+        self.write_config({"group_limits": {"games": 0}})
+        with open(self.state_path, 'w') as f:
+            json.dump({"group_usage": {"kid": {"games": 60}}}, f)
+        out = self.run_cmctl("usage")
+        self.assertIn("(Limit: 0 min, Remaining: 0 min)", out)
+
+    def test_config_reports_invalid_entries(self):
+        self.write_config({"group_limits": {"games": "90"}})
+        out = self.run_cmctl("config")
+        self.assertIn("Warning: Ignoring invalid group_limits entry 'games'", out)
 
     def test_groups_and_group_limits(self):
         self.run_cmctl("add-to-group", "games", "steam*")
@@ -204,6 +231,12 @@ class AccountCommandTest(CmctlTestCase):
         out = self.run_cmctl("disable-user", current_username())
         self.assertIn("Failed to disable account", out)
         self.assertEqual(self.read_json(self.user_control_path)["disabled_users"], {})
+
+    def test_min_uid_below_uid_min_does_not_expose_root(self):
+        self.write_config({"min_uid": 0})
+        out = self.run_cmctl("disable-user", "root")
+        self.assertIn("system account", out)
+        self.assertEqual(self.run_calls, [])
 
     def test_disable_unknown_user_is_refused(self):
         out = self.run_cmctl("disable-user", "no-such-user-cmtest")

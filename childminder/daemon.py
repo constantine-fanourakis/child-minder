@@ -18,7 +18,8 @@ from typing import Dict, Set, Optional, Tuple
 import pwd
 import subprocess
 import re
-import fnmatch
+
+from childminder import config as cfg
 
 # Default paths
 DEFAULT_CONFIG_PATH = "/etc/child-minder/config.json"
@@ -30,11 +31,6 @@ DEFAULT_LOG_PATH = "/var/log/child-minder/minder.log"
 LAST_GOOD_CONFIG_NAME = "config.last-good.json"
 # Account disables and access schedules written by cmctl, kept beside the state file
 USER_CONTROL_NAME = "user_control.json"
-
-# UID_MAX bounds regular user accounts; above it sit nobody (65534) and
-# systemd DynamicUser accounts (61184-65519)
-LOGIN_DEFS_PATH = "/etc/login.defs"
-DEFAULT_UID_MAX = 60000
 
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
@@ -55,23 +51,6 @@ SOUND_FILES = [
 ]
 
 
-class ConfigError(Exception):
-    """Raised when a configuration file cannot be read or parsed"""
-
-
-def read_uid_max(path: str = LOGIN_DEFS_PATH) -> int:
-    """Return the highest UID for regular users, from login.defs if it sets one"""
-    try:
-        with open(path) as f:
-            for line in f:
-                fields = line.split()
-                if len(fields) >= 2 and fields[0] == "UID_MAX":
-                    return int(fields[1])
-    except (OSError, ValueError):
-        pass
-    return DEFAULT_UID_MAX
-
-
 class ChildMinder:
     def __init__(self, config_path: str, state_path: str, log_path: str):
         self.config_path = Path(config_path)
@@ -82,7 +61,7 @@ class ChildMinder:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
         self.last_good_config_path = self.state_path.parent / LAST_GOOD_CONFIG_NAME
-        self.max_uid = read_uid_max()
+        self.uid_min, self.uid_max = cfg.read_uid_range()
 
         self.setup_logging()
         self.config = self.load_config()
@@ -151,18 +130,7 @@ class ChildMinder:
 
     def read_config_file(self, path: Path) -> dict:
         """Read and validate one config file, raising ConfigError if unusable"""
-        try:
-            with open(path, 'r') as f:
-                config = json.load(f)
-        except FileNotFoundError:
-            raise ConfigError(f"Config file not found at {path}")
-        except json.JSONDecodeError as e:
-            raise ConfigError(f"Invalid JSON in {path}: {e}")
-        except OSError as e:
-            raise ConfigError(f"Could not read {path}: {e}")
-        if not isinstance(config, dict):
-            raise ConfigError(f"{path} must contain a JSON object")
-        return self.validate_config(config)
+        return cfg.load(path, self.logger.warning, self.uid_min)
 
     def load_config(self) -> dict:
         """Load configuration, falling back to the last copy that parsed.
@@ -173,11 +141,11 @@ class ChildMinder:
         """
         try:
             config = self.read_config_file(self.config_path)
-        except ConfigError as e:
+        except cfg.ConfigError as e:
             self.logger.error(str(e))
             try:
                 config = self.read_config_file(self.last_good_config_path)
-            except ConfigError:
+            except cfg.ConfigError:
                 self.logger.critical(
                     "No usable configuration available, monitoring cannot start")
                 raise SystemExit(1)
@@ -201,129 +169,12 @@ class ChildMinder:
         self.logger.info("Reloading configuration...")
         try:
             config = self.read_config_file(self.config_path)
-        except ConfigError as e:
+        except cfg.ConfigError as e:
             self.logger.error(f"{e}; keeping the configuration already in use")
             return
         self.config = config
         self.save_last_good_config(config)
         self.logger.info("Configuration reloaded successfully")
-
-    def validate_config(self, config: dict) -> dict:
-        """Validate and fill in missing config keys with defaults"""
-        defaults = self.get_default_config()
-
-        # Ensure all required keys exist
-        for key, default_value in defaults.items():
-            if key not in config:
-                config[key] = default_value
-            elif isinstance(default_value, dict) and isinstance(config[key], dict):
-                # Recursively fill in nested dicts
-                for subkey, subdefault in default_value.items():
-                    if subkey not in config[key]:
-                        config[key][subkey] = subdefault
-
-        # Validate specific values
-        if not isinstance(config.get('check_interval'), (int, float)) or config['check_interval'] <= 0:
-            self.logger.warning(f"Invalid check_interval, using default: 5")
-            config['check_interval'] = 5
-
-        if not isinstance(config.get('min_uid'), int) or config['min_uid'] < 0:
-            self.logger.warning("Invalid min_uid, using default: 1000")
-            config['min_uid'] = 1000
-
-        for key, expected in (('monitored_users', list), ('blocked_processes', list),
-                              ('monitored_processes', list), ('limited_processes', dict),
-                              ('process_groups', dict), ('group_limits', dict),
-                              ('user_daily_limits', dict), ('user_control', dict)):
-            if not isinstance(config.get(key), expected):
-                self.logger.warning(f"Invalid '{key}', using default")
-                config[key] = expected()
-
-        interval = config['user_control'].get('check_interval', 60)
-        if not isinstance(interval, (int, float)) or interval <= 0:
-            self.logger.warning("Invalid user_control check_interval, using default: 60")
-            config['user_control']['check_interval'] = 60
-
-        self.validate_config_entries(config)
-        return config
-
-    def validate_config_entries(self, config: dict):
-        """Drop individual entries that would make every monitoring pass raise.
-
-        Only the bad entry goes, with a warning, so one typo in a hand-edited
-        file leaves the rest of the configuration enforced.
-        """
-        def is_number(value) -> bool:
-            return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-        def is_minutes(value) -> bool:
-            return is_number(value) and value >= 0
-
-        def valid_patterns(name: str, patterns: list) -> list:
-            kept = [p for p in patterns if isinstance(p, str)]
-            if len(kept) != len(patterns):
-                self.logger.warning(f"Ignoring non-string patterns in '{name}'")
-            return kept
-
-        for key in ('blocked_processes', 'monitored_processes'):
-            config[key] = valid_patterns(key, config[key])
-
-        for group, patterns in list(config['process_groups'].items()):
-            if isinstance(patterns, list):
-                config['process_groups'][group] = valid_patterns(
-                    f"process_groups.{group}", patterns)
-            else:
-                self.logger.warning(f"Ignoring invalid process_groups entry '{group}'")
-                del config['process_groups'][group]
-
-        for key in ('limited_processes', 'group_limits'):
-            for name, minutes in list(config[key].items()):
-                if not is_minutes(minutes):
-                    self.logger.warning(f"Ignoring invalid {key} entry '{name}'")
-                    del config[key][name]
-
-        for user, entry in list(config['user_daily_limits'].items()):
-            if is_minutes(entry):
-                continue
-            if isinstance(entry, dict) and all(
-                    entry.get(day) is None or is_minutes(entry.get(day))
-                    for day in ('weekday', 'weekend')):
-                continue
-            self.logger.warning(f"Ignoring invalid user_daily_limits entry '{user}'")
-            del config['user_daily_limits'][user]
-
-        intervals = config.get('warning_intervals')
-        if intervals is not None and not (
-                isinstance(intervals, list)
-                and all(is_number(w) and w > 0 for w in intervals)):
-            self.logger.warning("Invalid warning_intervals, using warning_time")
-            del config['warning_intervals']
-
-        for key, default in (('warning_time', 300), ('usage_log_interval', 60)):
-            if not is_number(config.get(key)) or config[key] <= 0:
-                self.logger.warning(f"Invalid {key}, using default: {default}")
-                config[key] = default
-
-    def get_default_config(self) -> dict:
-        """Return default configuration"""
-        return {
-            "enabled": True,
-            "check_interval": 5,
-            "min_uid": 1000,
-            "monitored_users": [],
-            "blocked_processes": [],
-            "limited_processes": {},
-            "process_groups": {},
-            "group_limits": {},
-            "user_daily_limits": {},
-            "monitored_processes": [],
-            "warning_time": 300,
-            "usage_log_interval": 60,
-            "user_control": {
-                "enabled": False,
-                "check_interval": 60
-            }
-        }
 
     def load_state(self) -> dict:
         """Load saved state from file"""
@@ -418,12 +269,14 @@ class ChildMinder:
     def is_regular_account(self, uid: int) -> bool:
         """Check that uid is a regular user, between min_uid and UID_MAX.
 
+        Config validation keeps min_uid at or above UID_MIN.
+
         Nothing the daemon does as root may target any other account: an
         empty monitored_users list means "every human user", not "init and
         the kernel threads too", and a disabled root would have every root
         process killed. Accounts above UID_MAX are system accounts as well.
         """
-        return self.config.get("min_uid", 1000) <= uid <= self.max_uid
+        return self.config["min_uid"] <= uid <= self.uid_max
 
     def should_monitor_user(self, username: str, uid: int) -> bool:
         """Check if user should be monitored; system accounts never are"""
@@ -442,33 +295,9 @@ class ChildMinder:
         """
         return proc.pid == 1 or proc.pid == os.getpid() or proc.ppid() == os.getpid()
 
-    
-    @staticmethod
-    def pattern_matches(pattern: str, process_name: str) -> bool:
-        """Match a config pattern against a process name.
-
-        Patterns are case-insensitive. A pattern containing any of * ? [ is
-        treated as a shell glob; anything else must match the whole name.
-        Substring matching is deliberately not the default: an entry like "sh"
-        would otherwise match bash, zsh and kernel threads, and these patterns
-        decide what the daemon terminates as root.
-        """
-        name = os.path.basename(process_name).lower()
-        pattern = pattern.lower()
-        if any(c in pattern for c in '*?['):
-            return fnmatch.fnmatchcase(name, pattern)
-        return name == pattern
-
-    def match_pattern(self, patterns, process_name: str) -> Optional[str]:
-        """Return the first pattern from patterns matching process_name, if any"""
-        for pattern in patterns:
-            if self.pattern_matches(pattern, process_name):
-                return pattern
-        return None
-
     def is_process_blocked(self, process_name: str) -> bool:
         """Check if process is in block list"""
-        return self.match_pattern(self.config.get("blocked_processes", []), process_name) is not None
+        return cfg.match_pattern(self.config.get("blocked_processes", []), process_name) is not None
 
     def get_process_group(self, process_name: str) -> Optional[str]:
         """Get the group name for a process, if any.
@@ -477,7 +306,7 @@ class ChildMinder:
         matches in config order.
         """
         for group_name, processes in self.config.get("process_groups", {}).items():
-            if self.match_pattern(processes, process_name):
+            if cfg.match_pattern(processes, process_name):
                 return group_name
         return None
 
@@ -624,13 +453,13 @@ class ChildMinder:
         chrome_crashpad_handler, say) share one counter with the limit.
         """
         for limited_name, limit_minutes in self.config.get("limited_processes", {}).items():
-            if self.pattern_matches(limited_name, process_name):
+            if cfg.pattern_matches(limited_name, process_name):
                 return limited_name, limit_minutes * 60
         return None, None
 
     def get_monitored_key(self, process_name: str) -> Optional[str]:
         """Return the monitored_processes config key matching this process, if any"""
-        return self.match_pattern(self.config.get("monitored_processes", []), process_name)
+        return cfg.match_pattern(self.config.get("monitored_processes", []), process_name)
 
     
     def update_usage(self, username: str, process_name: str, seconds: float):
@@ -791,16 +620,8 @@ class ChildMinder:
 
     def get_user_daily_limit(self, username: str) -> Optional[int]:
         """Get user's daily screen time limit in seconds for today (weekday vs weekend)"""
-        limits = self.config.get("user_daily_limits", {})
-        if username not in limits:
-            return None
-        entry = limits[username]
-        if isinstance(entry, (int, float)):
-            return int(entry) * 60  # backward compat: plain number
-        is_weekend = datetime.now().weekday() >= 5
-        key = "weekend" if is_weekend else "weekday"
-        val = entry.get(key)
-        return val * 60 if val is not None else None
+        minutes = cfg.user_daily_limit(self.config, username, datetime.now())
+        return None if minutes is None else minutes * 60
 
     def get_user_daily_usage(self, username: str) -> float:
         """Get current user daily usage in seconds"""

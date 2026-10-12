@@ -13,12 +13,12 @@ import os
 import subprocess
 import pwd
 
+from childminder import config as cfg
+
 CONFIG_PATH = "/etc/child-minder/config.json"
 STATE_PATH = "/var/lib/child-minder/state.json"
 LOG_PATH = "/var/log/child-minder/minder.log"
 USER_CONTROL_PATH = "/var/lib/child-minder/user_control.json"
-LOGIN_DEFS_PATH = "/etc/login.defs"
-DEFAULT_UID_MAX = 60000
 
 SERVICE = "child-minder"
 
@@ -30,19 +30,6 @@ def service_is_active() -> bool:
     """Check whether the child-minder service is currently running"""
     result = subprocess.run(['systemctl', 'is-active', '--quiet', SERVICE], check=False)
     return result.returncode == 0
-
-
-def read_uid_max(path: str = LOGIN_DEFS_PATH) -> int:
-    """Return the highest UID for regular users, from login.defs if it sets one"""
-    try:
-        with open(path) as f:
-            for line in f:
-                fields = line.split()
-                if len(fields) >= 2 and fields[0] == "UID_MAX":
-                    return int(fields[1])
-    except (OSError, ValueError):
-        pass
-    return DEFAULT_UID_MAX
 
 
 def atomic_write_json(path: Path, data: dict):
@@ -67,19 +54,25 @@ class ChildMinderManager:
         self.user_control_path = Path(USER_CONTROL_PATH)
         
     def load_config(self) -> dict:
-        """Load current configuration"""
+        """Load the configuration file as written, for editing"""
         try:
-            with open(self.config_path, 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            print(f"Error: Config file not found at {self.config_path}")
+            return cfg.read_file(self.config_path)
+        except cfg.ConfigError as e:
+            hint = " (try: sudo cmctl ...)" if os.geteuid() != 0 else ""
+            print(f"Error: {e}{hint}")
             sys.exit(1)
-        except PermissionError:
-            print(f"Error: Permission denied reading {self.config_path} (try: sudo cmctl ...)")
-            sys.exit(1)
-        except json.JSONDecodeError as e:
-            print(f"Error: Invalid JSON in config file: {e}")
-            sys.exit(1)
+
+    def effective_config(self) -> dict:
+        """Load the configuration as the daemon applies it, reporting invalid entries"""
+        uid_min, _ = cfg.read_uid_range()
+        return cfg.validate(self.load_config(), lambda m: print(f"Warning: {m}"), uid_min)
+
+    @staticmethod
+    def _check_minutes(minutes: int) -> bool:
+        if minutes < 0:
+            print("Error: Minutes must be zero or more (0 allows no time)")
+            return False
+        return True
             
     def save_config(self, config: dict):
         """Save configuration and ask the running service to pick it up"""
@@ -165,8 +158,7 @@ class ChildMinderManager:
     
     def set_group_limit(self, group_name: str, minutes: int):
         """Set time limit for a group"""
-        if minutes <= 0:
-            print("Error: Minutes must be a positive number")
+        if not self._check_minutes(minutes):
             return
         config = self.load_config()
         if 'group_limits' not in config:
@@ -187,8 +179,7 @@ class ChildMinderManager:
 
     def set_user_daily_limit(self, username: str, minutes: int, day_type: str = 'both'):
         """Set overall daily screen time limit for a user (weekday, weekend, or both)"""
-        if minutes <= 0:
-            print("Error: Minutes must be a positive number")
+        if not self._check_minutes(minutes):
             return
         config = self.load_config()
         config.setdefault('user_daily_limits', {})
@@ -218,7 +209,7 @@ class ChildMinderManager:
     
     def list_groups(self):
         """List all process groups and their limits"""
-        config = self.load_config()
+        config = self.effective_config()
         print("\n=== Process Groups ===")
         process_groups = config.get('process_groups', {})
         group_limits = config.get('group_limits', {})
@@ -236,8 +227,7 @@ class ChildMinderManager:
     
     def set_time_limit(self, process_name: str, minutes: int):
         """Set time limit for a process"""
-        if minutes <= 0:
-            print("Error: Minutes must be a positive number")
+        if not self._check_minutes(minutes):
             return
         config = self.load_config()
         if 'limited_processes' not in config:
@@ -280,7 +270,7 @@ class ChildMinderManager:
             
     def show_config(self):
         """Display current configuration"""
-        config = self.load_config()
+        config = self.effective_config()
         print("\n=== Current Configuration ===")
         print(f"Enabled: {config.get('enabled', True)}")
         print(f"Check Interval: {config.get('check_interval', 5)} seconds")
@@ -293,7 +283,7 @@ class ChildMinderManager:
         print(f"\nProcess Groups:")
         for group_name, processes in config.get('process_groups', {}).items():
             limit = config.get('group_limits', {}).get(group_name)
-            limit_str = f" ({limit} min/day)" if limit else ""
+            limit_str = f" ({limit} min/day)" if limit is not None else ""
             print(f"  {group_name}{limit_str}: {', '.join(processes)}")
         
         print(f"\nIndividual Time Limits:")
@@ -301,21 +291,18 @@ class ChildMinderManager:
             print(f"  - {proc}: {minutes} minutes/day")
 
         print(f"\nUser Daily Screen Time Limits:")
-        for user, entry in config.get('user_daily_limits', {}).items():
-            if isinstance(entry, (int, float)):
-                print(f"  - {user}: {int(entry)} min/day (weekday and weekend)")
+        for user, entry in config['user_daily_limits'].items():
+            weekday = entry['weekday']
+            weekend = entry['weekend']
+            if weekday == weekend:
+                print(f"  - {user}: {weekday} min/day (weekday and weekend)")
             else:
-                weekday = entry.get('weekday')
-                weekend = entry.get('weekend')
-                if weekday == weekend:
-                    print(f"  - {user}: {weekday} min/day (weekday and weekend)")
-                else:
-                    parts = []
-                    if weekday is not None:
-                        parts.append(f"weekday: {weekday} min")
-                    if weekend is not None:
-                        parts.append(f"weekend: {weekend} min")
-                    print(f"  - {user}: {', '.join(parts)}")
+                parts = []
+                if weekday is not None:
+                    parts.append(f"weekday: {weekday} min")
+                if weekend is not None:
+                    parts.append(f"weekend: {weekend} min")
+                print(f"  - {user}: {', '.join(parts)}")
 
         print(f"\nMonitored Processes (for logging):")
         for proc in config.get('monitored_processes', []):
@@ -324,7 +311,7 @@ class ChildMinderManager:
     def show_usage(self):
         """Display usage statistics"""
         state = self.load_state()
-        config = self.load_config()
+        config = self.effective_config()
         print("\n=== Daily Usage Statistics ===")
         print(f"Last reset: {state.get('last_reset', 'Unknown')}")
         
@@ -343,8 +330,8 @@ class ChildMinderManager:
                         print(f"  - {process}: {minutes:.0f} minutes")
                     
                     # Check if limited
-                    limit = config.get('limited_processes', {}).get(process)
-                    if limit:
+                    limit = config['limited_processes'].get(process)
+                    if limit is not None:
                         remaining = max(0, limit - minutes)
                         print(f"      (Limit: {limit} min, Remaining: {remaining:.0f} min)")
         
@@ -363,8 +350,8 @@ class ChildMinderManager:
                         print(f"  - Group '{group}': {minutes:.0f} minutes")
                     
                     # Check if limited
-                    limit = config.get('group_limits', {}).get(group)
-                    if limit:
+                    limit = config['group_limits'].get(group)
+                    if limit is not None:
                         remaining = max(0, limit - minutes)
                         print(f"      (Limit: {limit} min, Remaining: {remaining:.0f} min)")
         
@@ -372,23 +359,18 @@ class ChildMinderManager:
         user_daily_usage = state.get('user_daily_usage', {})
         if user_daily_usage:
             print("\nUser Daily Screen Time:")
-            is_weekend = datetime.now().weekday() >= 5
-            day_type = "weekend" if is_weekend else "weekday"
+            now = datetime.now()
             for user, seconds in user_daily_usage.items():
                 minutes = seconds / 60
                 if minutes >= 60:
                     print(f"  {user}: {minutes/60:.1f} hours")
                 else:
                     print(f"  {user}: {minutes:.0f} minutes")
-                entry = config.get('user_daily_limits', {}).get(user)
-                if entry is not None:
-                    if isinstance(entry, (int, float)):
-                        limit = int(entry)
-                    else:
-                        limit = entry.get('weekend' if is_weekend else 'weekday')
-                    if limit is not None:
-                        remaining = max(0, limit - minutes)
-                        print(f"    ({day_type} limit: {limit} min, Remaining: {remaining:.0f} min)")
+                limit = cfg.user_daily_limit(config, user, now)
+                if limit is not None:
+                    remaining = max(0, limit - minutes)
+                    print(f"    ({cfg.day_type(now)} limit: {limit} min, "
+                          f"Remaining: {remaining:.0f} min)")
 
         if not daily_usage and not group_usage and not user_daily_usage:
             print("No usage data available")
@@ -462,7 +444,8 @@ class ChildMinderManager:
                 return
             # The daemon never acts on system accounts, and expiring one such
             # as root can lock the administrator out.
-            if not self.load_config().get("min_uid", 1000) <= uid <= read_uid_max():
+            _, uid_max = cfg.read_uid_range()
+            if not self.effective_config()["min_uid"] <= uid <= uid_max:
                 print(f"Error: {username} is a system account and cannot be disabled")
                 return
 

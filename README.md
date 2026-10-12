@@ -81,7 +81,7 @@ Configuration lives at `/etc/child-minder/config.json`. Changes are picked up on
 |-----|------|---------|-------------|
 | `enabled` | bool | `true` | Master on/off switch |
 | `check_interval` | int | `5` | Seconds between process checks |
-| `min_uid` | int | `1000` | Lowest UID that may be monitored; system accounts are never touched |
+| `min_uid` | int | `1000` | Lowest UID that may be monitored; a value below `UID_MIN` in `/etc/login.defs` is replaced by `UID_MIN`, so system accounts are never touched |
 | `monitored_users` | list | `[]` | Usernames to monitor (empty = all users from `min_uid` up to `UID_MAX` in `/etc/login.defs`) |
 | `blocked_processes` | list | `[]` | Process patterns to block completely |
 | `limited_processes` | dict | `{}` | Process pattern → daily limit in minutes |
@@ -93,6 +93,10 @@ Configuration lives at `/etc/child-minder/config.json`. Changes are picked up on
 | `warning_intervals` | list | — | Multiple warning times in seconds (overrides `warning_time`) |
 | `usage_log_interval` | int | `60` | Seconds between usage summary logs |
 | `user_control` | dict | see below | User account control settings |
+
+Every limit is a number of minutes per day, and `0` allows no time at all. An
+entry with the wrong type is ignored with a warning in the log, and
+`cmctl config` lists the same warnings, so a typo disables only that entry.
 
 ### `user_control` sub-keys
 

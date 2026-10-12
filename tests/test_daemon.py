@@ -25,26 +25,6 @@ WEEKEND = datetime(2026, 10, 17)
 
 
 class PatternMatchingTest(MinderTestCase):
-    match = staticmethod(child_minder.ChildMinder.pattern_matches)
-
-    def test_plain_pattern_matches_whole_name_only(self):
-        self.assertTrue(self.match("steam", "steam"))
-        self.assertFalse(self.match("steam", "steamwebhelper"))
-        self.assertFalse(self.match("sh", "bash"))
-
-    def test_matching_ignores_case(self):
-        self.assertTrue(self.match("Steam", "STEAM"))
-        self.assertTrue(self.match("minecraft*", "MinecraftLauncher"))
-
-    def test_glob_characters_select_glob_matching(self):
-        self.assertTrue(self.match("steam*", "steamwebhelper"))
-        self.assertTrue(self.match("vl?", "vlc"))
-        self.assertTrue(self.match("[mn]pv", "mpv"))
-        self.assertFalse(self.match("steam*", "notsteam"))
-
-    def test_directory_part_of_name_is_ignored(self):
-        self.assertTrue(self.match("vlc", "/usr/bin/vlc"))
-
     def test_first_matching_group_wins(self):
         minder = self.make_minder({"process_groups": {
             "games": ["steam*"], "launchers": ["steam"]}})
@@ -58,63 +38,15 @@ class PatternMatchingTest(MinderTestCase):
 
 
 class ConfigTest(MinderTestCase):
-    def test_missing_keys_are_filled_with_defaults(self):
-        minder = self.make_minder({"blocked_processes": ["x"]})
-        self.assertEqual(minder.config["blocked_processes"], ["x"])
+    def test_config_is_validated_on_load(self):
+        minder = self.make_minder({"check_interval": -1, "user_daily_limits": {"kid": 90}})
         self.assertEqual(minder.config["check_interval"], 5)
-        self.assertEqual(minder.config["user_control"],
-                         {"enabled": False, "check_interval": 60})
+        self.assertEqual(minder.config["user_daily_limits"],
+                         {"kid": {"weekday": 90, "weekend": 90}})
 
-    def test_partial_nested_dict_is_completed(self):
-        minder = self.make_minder({"user_control": {"enabled": True}})
-        self.assertEqual(minder.config["user_control"],
-                         {"enabled": True, "check_interval": 60})
-
-    def test_invalid_scalar_values_fall_back(self):
-        minder = self.make_minder({"check_interval": -1, "min_uid": "1000"})
-        self.assertEqual(minder.config["check_interval"], 5)
-        self.assertEqual(minder.config["min_uid"], 1000)
-
-    def test_wrong_container_type_falls_back(self):
-        minder = self.make_minder({"blocked_processes": "steam", "group_limits": []})
-        self.assertEqual(minder.config["blocked_processes"], [])
-        self.assertEqual(minder.config["group_limits"], {})
-
-    def test_invalid_nested_values_are_dropped(self):
-        minder = self.make_minder({
-            "blocked_processes": ["fortnite*", 7],
-            "monitored_processes": [None, "code"],
-            "process_groups": {"games": ["steam*", {}], "bad": "roblox*"},
-            "limited_processes": {"chrome*": "60", "minecraft*": 30, "x": True},
-            "group_limits": {"games": "120", "video": 0},
-            "user_daily_limits": {"kid": {"weekday": "60", "weekend": 120},
-                                  "kid2": [60], "kid3": 90,
-                                  "kid4": {"weekday": 0, "weekend": None}},
-            "warning_intervals": [300, "60"],
-            "warning_time": "300",
-            "usage_log_interval": None})
-        config = minder.config
-        self.assertEqual(config["blocked_processes"], ["fortnite*"])
-        self.assertEqual(config["monitored_processes"], ["code"])
-        self.assertEqual(config["process_groups"], {"games": ["steam*"]})
-        self.assertEqual(config["limited_processes"], {"minecraft*": 30})
-        self.assertEqual(config["group_limits"], {"video": 0})
-        self.assertEqual(config["user_daily_limits"],
-                         {"kid3": 90, "kid4": {"weekday": 0, "weekend": None}})
-        self.assertNotIn("warning_intervals", config)
-        self.assertEqual(config["warning_time"], 300)
-        self.assertEqual(config["usage_log_interval"], 60)
-
-    def test_non_dict_user_control_falls_back(self):
+    def test_non_dict_user_control_does_not_break_enforcement(self):
         minder = self.make_minder({"user_control": None})
-        self.assertEqual(minder.config["user_control"], {})
         minder.enforce_user_control()
-
-    def test_invalid_user_control_interval_falls_back(self):
-        for bad in ("60", 0, -5, None):
-            minder = self.make_minder({"user_control": {"enabled": True, "check_interval": bad}})
-            self.assertEqual(minder.config["user_control"]["check_interval"], 60)
-            minder.enforce_user_control()
 
     def test_non_object_config_falls_back_to_last_good(self):
         self.make_minder({"blocked_processes": ["x"]})
@@ -168,19 +100,7 @@ class UserSelectionTest(MinderTestCase):
         minder = self.make_minder({"monitored_users": []})
         self.assertFalse(minder.should_monitor_user("nobody", 65534))
         self.assertFalse(minder.should_monitor_user("dynamic", 61184))
-        self.assertTrue(minder.should_monitor_user("kid", minder.max_uid))
-
-    def test_uid_max_is_read_from_login_defs(self):
-        defs = self.tmp / "login.defs"
-        defs.write_text("# comment\nUID_MIN\t\t1000\nUID_MAX\t\t50000\n")
-        self.assertEqual(child_minder.read_uid_max(str(defs)), 50000)
-
-    def test_uid_max_defaults_when_unavailable(self):
-        self.assertEqual(child_minder.read_uid_max(str(self.tmp / "missing")),
-                         child_minder.DEFAULT_UID_MAX)
-        defs = self.tmp / "login.defs"
-        defs.write_text("UID_MAX garbage\n")
-        self.assertEqual(child_minder.read_uid_max(str(defs)), child_minder.DEFAULT_UID_MAX)
+        self.assertTrue(minder.should_monitor_user("kid", minder.uid_max))
 
     def test_empty_list_monitors_every_human_user(self):
         minder = self.make_minder({"monitored_users": []})

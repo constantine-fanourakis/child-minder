@@ -13,7 +13,11 @@ from unittest import mock
 import psutil
 
 from childminder import cli as cmctl
+from childminder import config as cfg
 from childminder import daemon as child_minder
+
+# The host's login.defs is not consulted, so results do not depend on it
+UID_RANGE = (1000, 60000)
 
 # Keeps daemon records off stderr; assertLogs still captures them
 logging.getLogger("childminder").addHandler(logging.NullHandler())
@@ -92,7 +96,8 @@ class MinderTestCase(unittest.TestCase):
         def setup_logging(minder):
             minder.logger = logging.getLogger("childminder")
 
-        with mock.patch.object(child_minder.ChildMinder, 'setup_logging', setup_logging):
+        with mock.patch.object(child_minder.ChildMinder, 'setup_logging', setup_logging), \
+                mock.patch.object(cfg, 'read_uid_range', return_value=UID_RANGE):
             return child_minder.ChildMinder(
                 str(self.config_path), str(self.state_path), str(self.log_path))
 
@@ -128,6 +133,14 @@ class CmctlTestCase(unittest.TestCase):
         patcher = mock.patch.object(cmctl.os, 'geteuid', side_effect=lambda: self.euid)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+        patcher = mock.patch.object(cfg, 'read_uid_range', return_value=UID_RANGE)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def write_config(self, config: dict):
+        with open(self.config_path, 'w') as f:
+            json.dump(config, f)
 
     def fake_run_result(self, argv):
         """Result returned for a command cmctl runs; override to simulate failures"""
