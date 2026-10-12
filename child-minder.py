@@ -109,6 +109,7 @@ class ChildMinder:
         self.user_control_state = self.load_user_control_state()
 
         self.running = True
+        self.stop_signal: Optional[int] = None
         self.reload_requested = False
         self.reset_requested = False
 
@@ -138,7 +139,7 @@ class ChildMinder:
     # it cannot interleave with a state write already in progress.
     def stop_handler(self, signum, frame):
         """Handle shutdown signals"""
-        self.logger.info(f"Received signal {signum}, shutting down...")
+        self.stop_signal = signum
         self.running = False
 
     def reload_handler(self, signum, frame):
@@ -1266,6 +1267,8 @@ class ChildMinder:
                 time.sleep(5)
                 last_tick = time.monotonic()
 
+        if self.stop_signal is not None:
+            self.logger.info(f"Received signal {self.stop_signal}, shutting down")
         self.save_state()
         self.logger.info("Child Minder stopped")
 

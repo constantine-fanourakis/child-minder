@@ -413,6 +413,14 @@ class MonitorPassTest(MinderTestCase):
         self.assertEqual(minder.end_user_session.call_args.args[0], "kid")
 
 
+class SignalTest(MinderTestCase):
+    def test_stop_signal_only_sets_a_flag(self):
+        minder = self.make_minder()
+        with self.assertNoLogs("child_minder"):
+            minder.stop_handler(child_minder.signal.SIGTERM, None)
+        self.assertFalse(minder.running)
+
+
 class TerminalMessageTest(MinderTestCase):
     def test_message_reaches_each_terminal_once(self):
         tty = self.tmp / "tty"
