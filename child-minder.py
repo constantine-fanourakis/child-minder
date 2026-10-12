@@ -239,6 +239,11 @@ class ChildMinder:
                 self.logger.warning(f"Invalid '{key}', using default")
                 config[key] = expected()
 
+        interval = config['user_control'].get('check_interval', 60)
+        if not isinstance(interval, (int, float)) or interval <= 0:
+            self.logger.warning("Invalid user_control check_interval, using default: 60")
+            config['user_control']['check_interval'] = 60
+
         return config
 
     def get_default_config(self) -> dict:

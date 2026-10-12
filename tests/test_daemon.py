@@ -84,6 +84,12 @@ class ConfigTest(MinderTestCase):
         self.assertEqual(minder.config["user_control"], {})
         minder.enforce_user_control()
 
+    def test_invalid_user_control_interval_falls_back(self):
+        for bad in ("60", 0, -5, None):
+            minder = self.make_minder({"user_control": {"enabled": True, "check_interval": bad}})
+            self.assertEqual(minder.config["user_control"]["check_interval"], 60)
+            minder.enforce_user_control()
+
     def test_non_object_config_falls_back_to_last_good(self):
         self.make_minder({"blocked_processes": ["x"]})
         for content in ("[]", "null", "42"):
