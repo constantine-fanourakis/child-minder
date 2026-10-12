@@ -14,8 +14,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
-DEFAULT_CONFIG_PATH = "/etc/child-minder/config.json"
-
 # UID_MIN and UID_MAX bound regular user accounts. Below sit root and system
 # accounts; above sit nobody (65534) and systemd DynamicUser accounts
 # (61184-65519).

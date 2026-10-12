@@ -23,7 +23,6 @@ from typing import Callable, Iterator, Optional
 
 from childminder import schedule
 
-DEFAULT_STATE_DIR = "/var/lib/child-minder"
 USER_CONTROL_NAME = "user_control.json"
 
 Warn = Callable[[str], None]
