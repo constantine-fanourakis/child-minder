@@ -307,11 +307,6 @@ A denied day type logs the user out whenever it applies. Setting hours or
 adding a window for that day type lifts the denial in favour of the windows;
 clearing its windows makes it unrestricted again.
 
-Earlier releases treated a day type with no windows as no access. Schedules
-written by those releases are converted on first load: each such day type is
-marked as denied, so nothing changes for the child, and a warning in the log
-names the user, the day type and the command that lifts it.
-
 ### Multiple time windows
 
 You can define multiple access windows per day. For example, allow morning and afternoon access with a break:

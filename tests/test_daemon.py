@@ -410,52 +410,6 @@ class UsageSummaryTest(MinderTestCase):
         self.assertFalse(any("Remaining" in line for line in logs.output))
 
 
-class ScheduleMigrationTest(MinderTestCase):
-    WINDOW = {"start_hour": 15, "end_hour": 20}
-
-    def load(self, data: dict):
-        self.write_user_control(data)
-        return self.make_minder()
-
-    def saved(self) -> dict:
-        with open(self.user_control_path) as f:
-            return json.load(f)
-
-    def test_empty_day_type_in_old_file_stays_denied(self):
-        with self.assertLogs("child_minder", "WARNING") as logs:
-            minder = self.load({"disabled_users": {}, "daily_schedules": {
-                "kid": {"weekday": [self.WINDOW], "weekend": []}}})
-        expected = {"weekday": [self.WINDOW], "weekend": [], "no_access": ["weekend"]}
-        self.assertEqual(minder.user_control_state["daily_schedules"]["kid"], expected)
-        self.assertEqual(self.saved()["daily_schedules"]["kid"], expected)
-        self.assertEqual(self.saved()["schedule_format"], child_minder.SCHEDULE_FORMAT)
-        self.assertTrue(any("kid" in line and "clear-weekend-windows" in line
-                            for line in logs.output), logs.output)
-
-    def test_old_file_with_no_windows_at_all_stays_locked_out(self):
-        minder = self.load({"daily_schedules": {"kid": {"weekday": [], "weekend": []}}})
-        self.assertEqual(minder.user_control_state["daily_schedules"]["kid"]["no_access"],
-                         ["weekday", "weekend"])
-
-    def test_old_legacy_format_is_normalized_without_denial(self):
-        minder = self.load({"daily_schedules": {"kid": {"start_hour": 8, "end_hour": 20}}})
-        window = {"start_hour": 8, "end_hour": 20}
-        self.assertEqual(minder.user_control_state["daily_schedules"]["kid"],
-                         {"weekday": [window], "weekend": [window]})
-
-    def test_current_format_file_is_left_alone(self):
-        data = {"schedule_format": child_minder.SCHEDULE_FORMAT, "disabled_users": {},
-                "daily_schedules": {"kid": {"weekday": [self.WINDOW], "weekend": []}}}
-        with self.assertNoLogs("child_minder", "WARNING"):
-            minder = self.load(data)
-        self.assertEqual(minder.user_control_state, data)
-        self.assertEqual(self.saved(), data)
-
-    def test_missing_file_is_not_created(self):
-        self.make_minder()
-        self.assertFalse(self.user_control_path.exists())
-
-
 class UserControlTest(MinderTestCase):
     def test_expired_timed_disable_re_enables_account(self):
         self.write_user_control({"disabled_users": {"kid": {

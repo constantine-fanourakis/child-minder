@@ -18,9 +18,6 @@ CONFIG_PATH = "/etc/child-minder/config.json"
 STATE_PATH = "/var/lib/child-minder/state.json"
 LOG_PATH = "/var/log/child-minder/minder.log"
 USER_CONTROL_PATH = "/var/lib/child-minder/user_control.json"
-# Must match SCHEDULE_FORMAT in child-minder.py, which migrates older files the
-# same way
-SCHEDULE_FORMAT = 2
 
 SERVICE = "child-minder"
 
@@ -535,33 +532,11 @@ class ChildMinderManager:
         for key, default_value in defaults.items():
             if key not in user_control:
                 user_control[key] = default_value
-        if user_control.get("schedule_format", 1) < SCHEDULE_FORMAT:
-            self._migrate_schedules(user_control)
         return user_control
-
-    def _migrate_schedules(self, user_control: dict):
-        """Bring schedules from an older user control file up to SCHEDULE_FORMAT.
-
-        Those files meant "no access" by a day type with no windows, which now
-        means unrestricted, so each such day type is marked no_access to keep
-        it denied. The result is written by the next save.
-        """
-        schedules = user_control.get("daily_schedules", {})
-        for username, schedule in schedules.items():
-            normalized = self._normalize_schedule(schedule)
-            empty = [d for d in ("weekday", "weekend") if not normalized.get(d)]
-            if empty:
-                normalized["no_access"] = empty
-            schedules[username] = normalized
-            for day_type in empty:
-                print(f"Note: {username} keeps no {day_type} access from a schedule written "
-                      f"before day types could be denied explicitly; to allow it, run "
-                      f"cmctl clear-{day_type}-windows {username}")
 
     def _save_user_control(self, user_control: dict):
         """Save user control state and enable user control in config"""
         self.user_control_path.parent.mkdir(parents=True, exist_ok=True)
-        user_control["schedule_format"] = SCHEDULE_FORMAT
         atomic_write_json(self.user_control_path, user_control)
 
         # Enable user control in main config

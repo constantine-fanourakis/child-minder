@@ -31,10 +31,6 @@ DEFAULT_LOG_PATH = "/var/log/child-minder/minder.log"
 LAST_GOOD_CONFIG_NAME = "config.last-good.json"
 # Account disables and access schedules written by cmctl, kept beside the state file
 USER_CONTROL_NAME = "user_control.json"
-# Format of the schedules in the user control file. Files without a
-# schedule_format predate no_access and meant "no access" by a day type with
-# no windows, which now means unrestricted.
-SCHEDULE_FORMAT = 2
 
 # UID_MAX bounds regular user accounts; above it sit nobody (65534) and
 # systemd DynamicUser accounts (61184-65519)
@@ -705,43 +701,14 @@ class ChildMinder:
         try:
             if self.user_control_file.exists():
                 with open(self.user_control_file, 'r') as f:
-                    state = json.load(f)
-                if state.get("schedule_format", 1) < SCHEDULE_FORMAT:
-                    self.migrate_user_control(state)
-                return state
+                    return json.load(f)
         except Exception as e:
             self.logger.warning(f"Could not load user control state: {e}")
 
         return {
-            "schedule_format": SCHEDULE_FORMAT,
             "disabled_users": {},
             "daily_schedules": {}
         }
-
-    def migrate_user_control(self, state: dict):
-        """Bring schedules from an older user control file up to SCHEDULE_FORMAT and save them.
-
-        Every schedule is normalized, and each day type with no windows is
-        marked no_access so that it stays denied as it was when written.
-        """
-        schedules = state.get("daily_schedules", {})
-        for username, schedule in schedules.items():
-            normalized = self._normalize_schedule(schedule)
-            empty = [d for d in ("weekday", "weekend") if not normalized.get(d)]
-            if empty:
-                normalized["no_access"] = empty
-            schedules[username] = normalized
-            for day_type in empty:
-                self.logger.warning(
-                    f"{username} keeps no {day_type} access from a schedule written "
-                    f"before day types could be denied explicitly; to allow it, run "
-                    f"cmctl clear-{day_type}-windows {username} or set {day_type} hours")
-        state["schedule_format"] = SCHEDULE_FORMAT
-
-        try:
-            self.atomic_write_json(self.user_control_file, state)
-        except OSError as e:
-            self.logger.error(f"Could not save migrated user control state: {e}")
 
     def get_group_usage(self, username: str, group_name: str) -> float:
         """Get current group usage in seconds"""
