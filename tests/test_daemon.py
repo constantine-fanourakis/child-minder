@@ -195,6 +195,18 @@ class AccessHoursTest(MinderTestCase):
         schedule = {"weekday": [{"start_hour": 15, "end_hour": 20}], "weekend": []}
         self.assertTrue(self.access_at(WEEKEND.replace(hour=3), schedule))
 
+    def test_no_access_day_type_is_denied_all_day(self):
+        schedule = {"weekday": [{"start_hour": 15, "end_hour": 20}], "weekend": [],
+                    "no_access": ["weekend"]}
+        for hour in (0, 12, 23):
+            self.assertFalse(self.access_at(WEEKEND.replace(hour=hour), schedule))
+        self.assertTrue(self.access_at(WEEKDAY.replace(hour=16), schedule))
+
+    def test_no_access_overrides_stray_windows(self):
+        schedule = {"weekday": [{"start_hour": 0, "end_hour": 23}], "weekend": [],
+                    "no_access": ["weekday"]}
+        self.assertFalse(self.access_at(WEEKDAY.replace(hour=12), schedule))
+
     def test_legacy_flat_schedule_applies_to_all_days(self):
         schedule = {"start_hour": 8, "end_hour": 20}
         self.assertFalse(self.access_at(WEEKDAY.replace(hour=21), schedule))

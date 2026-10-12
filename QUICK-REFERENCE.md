@@ -126,12 +126,17 @@ sudo cmctl clear-weekday-windows johnny      # weekdays unrestricted
 sudo cmctl clear-weekend-windows johnny      # weekends unrestricted
 sudo cmctl clear-user-hours johnny           # unrestricted at any time
 
+# Deny a whole day type; set hours or clear to lift it
+sudo cmctl deny-weekday-access johnny        # no access Mon-Fri
+sudo cmctl deny-weekend-access johnny        # no access Sat-Sun
+
 # Overnight schedules (start > end)
 sudo cmctl set-weekend-hours johnny 22 6     # 10 PM - 6 AM
 ```
 
-A day type with no windows is unrestricted. Weekday and weekend schedules are
-independent: setting one leaves the other open until it is set too.
+A day type with no windows is unrestricted; one that is denied has no access
+at all. Weekday and weekend schedules are independent: setting one leaves the
+other open until it is set too.
 
 ### System Control
 ```bash

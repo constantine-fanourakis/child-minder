@@ -897,7 +897,8 @@ class ChildMinder:
 
         Supports both regular hours (e.g., 8-22) and overnight hours (e.g., 22-6).
         Also supports separate weekday and weekend schedules with multiple time windows.
-        A day type with no windows is unrestricted, so a user can be limited on
+        A day type listed in the schedule's no_access is denied all day; otherwise
+        a day type with no windows is unrestricted, so a user can be limited on
         weekdays while their weekend stays open.
         """
         try:
@@ -915,11 +916,10 @@ class ChildMinder:
             # Normalize schedule to array format
             normalized = self._normalize_schedule(schedule)
 
-            # Get appropriate windows based on day of week
-            if is_weekend:
-                windows = normalized.get("weekend", [])
-            else:
-                windows = normalized.get("weekday", [])
+            day_type = "weekend" if is_weekend else "weekday"
+            if day_type in normalized.get("no_access", []):
+                return False
+            windows = normalized.get(day_type, [])
 
             # No windows for this day type means no restriction on it
             if not windows:

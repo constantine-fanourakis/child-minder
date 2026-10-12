@@ -245,6 +245,11 @@ cmctl add-weekday-window johnny 7 8         # Add morning window (7-8 AM)
 cmctl add-weekend-window johnny 12 14       # Add afternoon window
 cmctl remove-weekday-window johnny 7 8      # Remove a window
 cmctl remove-weekend-window johnny 12 14    # Remove a window
+
+# Clearing and denying
+cmctl clear-weekday-windows johnny          # Weekdays unrestricted
+cmctl clear-user-hours johnny               # Unrestricted at any time
+cmctl deny-weekend-access johnny            # No access Sat-Sun
 ```
 
 Overnight schedules are supported — use a start hour greater than the end hour (e.g., `22 6` for 10 PM to 6 AM).
@@ -264,7 +269,8 @@ Access schedules control when a user can log in. Outside allowed hours, the user
 A day type with no windows is unrestricted. Weekdays and weekends are set
 independently, so restricting one leaves the other open until you restrict it
 too, and removing a user's last window for a day type returns that day to
-unrestricted rather than locking them out.
+unrestricted rather than locking them out. To bar a whole day type, deny it
+explicitly with `deny-weekday-access` or `deny-weekend-access`.
 
 ### Separate weekday/weekend hours
 
@@ -289,6 +295,17 @@ sudo cmctl clear-user-hours johnny        # unrestricted at any time
 
 `remove-weekday-window` and `remove-weekend-window` drop one window at a time
 and need its exact hours; the clear commands remove all of them at once.
+
+### Denying a day type
+
+```bash
+sudo cmctl deny-weekday-access johnny     # no access at all Mon-Fri
+sudo cmctl deny-weekend-access johnny     # no access at all Sat-Sun
+```
+
+A denied day type logs the user out whenever it applies. Setting hours or
+adding a window for that day type lifts the denial in favour of the windows;
+clearing its windows makes it unrestricted again.
 
 ### Multiple time windows
 

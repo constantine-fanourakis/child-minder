@@ -221,3 +221,56 @@ class ScheduleCommandTest(CmctlTestCase):
         out = self.run_cmctl("user-status")
         self.assertIn("Weekday (Mon-Fri): 15:00 - 20:00", out)
         self.assertIn("Weekend (Sat-Sun): Unrestricted", out)
+
+    def test_deny_day_type(self):
+        self.run_cmctl("set-weekday-hours", "kid", "15", "20")
+        self.run_cmctl("add-weekend-window", "kid", "9", "12")
+        out = self.run_cmctl("deny-weekend-access", "kid")
+        self.assertIn("no weekend access", out)
+        self.assertEqual(self.schedule(), {
+            "weekday": [{"start_hour": 15, "end_hour": 20}], "weekend": [],
+            "no_access": ["weekend"]})
+        self.assertTrue(self.read_json(self.config_path)["user_control"]["enabled"])
+
+    def test_deny_is_idempotent(self):
+        self.run_cmctl("deny-weekday-access", "kid")
+        out = self.run_cmctl("deny-weekday-access", "kid")
+        self.assertIn("already has no weekday access", out)
+        self.assertEqual(self.schedule()["no_access"], ["weekday"])
+
+    def test_setting_hours_lifts_deny(self):
+        self.run_cmctl("deny-weekend-access", "kid")
+        self.run_cmctl("set-weekend-hours", "kid", "10", "22")
+        self.assertEqual(self.schedule(), {
+            "weekday": [], "weekend": [{"start_hour": 10, "end_hour": 22}]})
+
+    def test_adding_window_lifts_deny(self):
+        self.run_cmctl("deny-weekday-access", "kid")
+        self.run_cmctl("add-weekday-window", "kid", "7", "8")
+        self.assertNotIn("no_access", self.schedule())
+
+    def test_clearing_denied_day_type_makes_it_unrestricted(self):
+        self.run_cmctl("set-weekday-hours", "kid", "15", "20")
+        self.run_cmctl("deny-weekend-access", "kid")
+        self.run_cmctl("clear-weekend-windows", "kid")
+        self.assertEqual(self.schedule(), {
+            "weekday": [{"start_hour": 15, "end_hour": 20}], "weekend": []})
+
+    def test_clearing_keeps_entry_while_other_day_is_denied(self):
+        self.run_cmctl("set-weekday-hours", "kid", "15", "20")
+        self.run_cmctl("deny-weekend-access", "kid")
+        self.run_cmctl("clear-weekday-windows", "kid")
+        self.assertEqual(self.schedule(), {
+            "weekday": [], "weekend": [], "no_access": ["weekend"]})
+
+    def test_user_status_shows_no_access(self):
+        self.run_cmctl("set-weekday-hours", "kid", "15", "20")
+        self.run_cmctl("deny-weekend-access", "kid")
+        out = self.run_cmctl("user-status")
+        self.assertIn("Weekend (Sat-Sun): No access", out)
+
+    def test_user_status_shows_no_access_on_all_days(self):
+        self.run_cmctl("deny-weekday-access", "kid")
+        self.run_cmctl("deny-weekend-access", "kid")
+        out = self.run_cmctl("user-status")
+        self.assertIn("Access Hours: No access (all days)", out)
