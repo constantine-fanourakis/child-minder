@@ -132,6 +132,24 @@ class UserSelectionTest(MinderTestCase):
         self.assertFalse(minder.should_monitor_user("root", 0))
         self.assertFalse(minder.should_monitor_user("daemon", 999))
 
+    def test_accounts_above_uid_max_are_never_monitored(self):
+        minder = self.make_minder({"monitored_users": []})
+        self.assertFalse(minder.should_monitor_user("nobody", 65534))
+        self.assertFalse(minder.should_monitor_user("dynamic", 61184))
+        self.assertTrue(minder.should_monitor_user("kid", minder.max_uid))
+
+    def test_uid_max_is_read_from_login_defs(self):
+        defs = self.tmp / "login.defs"
+        defs.write_text("# comment\nUID_MIN\t\t1000\nUID_MAX\t\t50000\n")
+        self.assertEqual(child_minder.read_uid_max(str(defs)), 50000)
+
+    def test_uid_max_defaults_when_unavailable(self):
+        self.assertEqual(child_minder.read_uid_max(str(self.tmp / "missing")),
+                         child_minder.DEFAULT_UID_MAX)
+        defs = self.tmp / "login.defs"
+        defs.write_text("UID_MAX garbage\n")
+        self.assertEqual(child_minder.read_uid_max(str(defs)), child_minder.DEFAULT_UID_MAX)
+
     def test_empty_list_monitors_every_human_user(self):
         minder = self.make_minder({"monitored_users": []})
         self.assertTrue(minder.should_monitor_user("kid", KID_UID))

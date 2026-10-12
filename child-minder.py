@@ -32,6 +32,11 @@ LAST_GOOD_CONFIG_NAME = "config.last-good.json"
 # Account disables and access schedules written by cmctl, kept beside the state file
 USER_CONTROL_NAME = "user_control.json"
 
+# UID_MAX bounds regular user accounts; above it sit nobody (65534) and
+# systemd DynamicUser accounts (61184-65519)
+LOGIN_DEFS_PATH = "/etc/login.defs"
+DEFAULT_UID_MAX = 60000
+
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 5
 
@@ -55,6 +60,19 @@ class ConfigError(Exception):
     """Raised when a configuration file cannot be read or parsed"""
 
 
+def read_uid_max(path: str = LOGIN_DEFS_PATH) -> int:
+    """Return the highest UID for regular users, from login.defs if it sets one"""
+    try:
+        with open(path) as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) >= 2 and fields[0] == "UID_MAX":
+                    return int(fields[1])
+    except (OSError, ValueError):
+        pass
+    return DEFAULT_UID_MAX
+
+
 class ChildMinder:
     def __init__(self, config_path: str, state_path: str, log_path: str):
         self.config_path = Path(config_path)
@@ -65,6 +83,7 @@ class ChildMinder:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
         self.last_good_config_path = self.state_path.parent / LAST_GOOD_CONFIG_NAME
+        self.max_uid = read_uid_max()
 
         self.setup_logging()
         self.config = self.load_config()
@@ -334,8 +353,9 @@ class ChildMinder:
         System accounts are never monitored regardless of configuration: the
         daemon terminates processes as root, and an empty monitored_users list
         means "every human user", not "init and the kernel threads too".
+        Accounts above UID_MAX are system accounts as well.
         """
-        if uid < self.config.get("min_uid", 1000):
+        if uid < self.config.get("min_uid", 1000) or uid > self.max_uid:
             return False
         monitored_users = self.config.get("monitored_users", [])
         if not monitored_users:  # If empty, monitor all non-system users

@@ -83,7 +83,7 @@ Configuration lives at `/etc/child-minder/config.json`. Changes are picked up on
 | `enabled` | bool | `true` | Master on/off switch |
 | `check_interval` | int | `5` | Seconds between process checks |
 | `min_uid` | int | `1000` | Lowest UID that may be monitored; system accounts are never touched |
-| `monitored_users` | list | `[]` | Usernames to monitor (empty = all users at or above `min_uid`) |
+| `monitored_users` | list | `[]` | Usernames to monitor (empty = all users from `min_uid` up to `UID_MAX` in `/etc/login.defs`) |
 | `blocked_processes` | list | `[]` | Process patterns to block completely |
 | `limited_processes` | dict | `{}` | Process pattern → daily limit in minutes |
 | `process_groups` | dict | `{}` | Group name → list of process patterns |
@@ -372,7 +372,7 @@ python3 -c "import psutil; print('OK')"
 
 ### Processes not being blocked
 
-- Verify the username is in `monitored_users` and their UID is at or above `min_uid`
+- Verify the username is in `monitored_users` and their UID is at or above `min_uid` and no higher than `UID_MAX` in `/etc/login.defs` (60000 if unset)
 - Check the pattern matches the process name exactly, or add a trailing `*`.
   Confirm the name with `ps -eo comm= | sort -u | grep -i <app>`
 - Ensure service is running: `sudo systemctl status child-minder`
