@@ -275,6 +275,13 @@ too, and removing a user's last window for a day type returns that day to
 unrestricted rather than locking them out. To bar a whole day type, deny it
 explicitly with `deny-weekday-access` or `deny-weekend-access`.
 
+**Upgrading from a release without `deny-*-access`:** those releases treated a
+day type with no windows as no access, and `remove-*-window` warned "user will
+have no weekend access" when the last window went. Such a day type is now
+unrestricted. Check each user with `cmctl user-status`, and run
+`deny-weekday-access` or `deny-weekend-access` wherever a day type that shows
+as Unrestricted was meant to be blocked.
+
 ### Separate weekday/weekend hours
 
 ```bash

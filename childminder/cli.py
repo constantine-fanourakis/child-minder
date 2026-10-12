@@ -14,6 +14,7 @@ import subprocess
 import pwd
 
 from childminder import config as cfg
+from childminder import schedule
 
 CONFIG_PATH = "/etc/child-minder/config.json"
 STATE_PATH = "/var/lib/child-minder/state.json"
@@ -520,18 +521,13 @@ class ChildMinderManager:
         except Exception as e:
             print(f"Error enabling user: {e}")
     
-    def _validate_hours(self, start_hour: int, end_hour: int) -> bool:
-        """Validate hour range for schedule"""
-        if not (0 <= start_hour <= 23):
-            print(f"Error: Start hour must be between 0 and 23, got {start_hour}")
-            return False
-        if not (0 <= end_hour <= 23):
-            print(f"Error: End hour must be between 0 and 23, got {end_hour}")
-            return False
-        if start_hour == end_hour:
-            print(f"Error: Start and end hours cannot be the same")
-            return False
-        return True
+    def _window(self, start_hour: int, end_hour: int) -> Optional[dict]:
+        """Return the window for an hour range, or None after reporting why it is invalid"""
+        error = schedule.hours_error(start_hour, end_hour)
+        if error:
+            print(f"Error: {error}")
+            return None
+        return {"start_hour": start_hour, "end_hour": end_hour}
 
     def _load_user_control(self) -> dict:
         """Load user control state"""
@@ -565,400 +561,130 @@ class ChildMinderManager:
         config["user_control"]["enabled"] = True
         self.save_config(config)
 
-    def _format_hour_range(self, start_hour: int, end_hour: int) -> str:
-        """Format hour range for display"""
-        if start_hour > end_hour:
-            return f"{start_hour:02d}:00 - {end_hour:02d}:00 (overnight)"
-        return f"{start_hour:02d}:00 - {end_hour:02d}:00"
+    def _user_schedule(self, user_control: dict, username: str) -> dict:
+        """Return username's schedule in the current format, empty if there is none"""
+        return schedule.normalize(user_control["daily_schedules"].get(username))
 
-    def _normalize_schedule(self, schedule: dict) -> dict:
-        """Normalize schedule to the array format, handling all legacy formats.
-
-        Returns schedule in format:
-        {
-            "weekday": [{"start_hour": 8, "end_hour": 22}, ...],
-            "weekend": [{"start_hour": 10, "end_hour": 23}, ...]
-        }
-        """
-        # Already in array format
-        if isinstance(schedule.get("weekday"), list):
-            return schedule
-
-        # Single dict format: {"weekday": {"start_hour": 8, "end_hour": 22}}
-        if isinstance(schedule.get("weekday"), dict):
-            weekday = schedule["weekday"]
-            weekend = schedule.get("weekend", weekday)
-            return {
-                "weekday": [weekday],
-                "weekend": [weekend] if weekend != weekday else [weekday]
-            }
-
-        # Old flat format: {"start_hour": 8, "end_hour": 22, "weekday": true}
-        if "start_hour" in schedule:
-            window = {"start_hour": schedule["start_hour"], "end_hour": schedule["end_hour"]}
-            return {
-                "weekday": [window],
-                "weekend": [window.copy()]
-            }
-
-        # Empty or unknown format
-        return {"weekday": [], "weekend": []}
-
-    def _format_windows(self, windows: list) -> str:
-        """Format a list of time windows for display"""
-        if not windows:
-            return "Unrestricted"
-        return ", ".join(self._format_hour_range(w["start_hour"], w["end_hour"]) for w in windows)
-
-    def _is_denied(self, schedule: dict, day_type: str) -> bool:
-        """Whether a day type is marked as having no access at all"""
-        return day_type in schedule.get("no_access", [])
-
-    def _allow_day(self, schedule: dict, day_type: str):
-        """Remove a day type's no-access mark, dropping the key once nothing is denied"""
-        denied = [d for d in schedule.get("no_access", []) if d != day_type]
-        if denied:
-            schedule["no_access"] = denied
+    def _store_schedule(self, user_control: dict, username: str, sched: dict):
+        """Save username's schedule, dropping it when it no longer restricts anything"""
+        if schedule.is_empty(sched):
+            user_control["daily_schedules"].pop(username, None)
         else:
-            schedule.pop("no_access", None)
+            user_control["daily_schedules"][username] = sched
+        self._save_user_control(user_control)
 
-    def _format_day(self, schedule: dict, day_type: str) -> str:
-        """Format one day type's access for display"""
-        if self._is_denied(schedule, day_type):
-            return "No access"
-        return self._format_windows(schedule.get(day_type, []))
+    @staticmethod
+    def _other_day(day: str) -> str:
+        return "weekend" if day == "weekday" else "weekday"
 
-    def _print_schedule(self, schedule: dict, indent: str = ""):
-        """Print schedule in a user-friendly format, handling all formats"""
-        normalized = self._normalize_schedule(schedule)
-        weekday_windows = normalized.get("weekday", [])
-        weekend_windows = normalized.get("weekend", [])
+    def set_hours(self, username: str, day: str, start_hour: int, end_hour: int,
+                  fill_empty_weekend: bool = False):
+        """Make one window the only allowed access on a day type.
 
-        weekday_str = self._format_day(normalized, "weekday")
-        weekend_str = self._format_day(normalized, "weekend")
-
-        if (weekday_windows == weekend_windows and
-                self._is_denied(normalized, "weekday") == self._is_denied(normalized, "weekend")):
-            if len(weekday_windows) == 0:
-                print(f"{indent}Access Hours: {weekday_str} (all days)")
-            elif len(weekday_windows) == 1:
-                print(f"{indent}Access Hours: {weekday_str} (all days)")
-            else:
-                print(f"{indent}Access Hours (all days):")
-                for w in weekday_windows:
-                    print(f"{indent}  {self._format_hour_range(w['start_hour'], w['end_hour'])}")
-        else:
-            print(f"{indent}Access Hours:")
-            if len(weekday_windows) <= 1:
-                print(f"{indent}  Weekday (Mon-Fri): {weekday_str}")
-            else:
-                print(f"{indent}  Weekday (Mon-Fri):")
-                for w in weekday_windows:
-                    print(f"{indent}    {self._format_hour_range(w['start_hour'], w['end_hour'])}")
-            if len(weekend_windows) <= 1:
-                print(f"{indent}  Weekend (Sat-Sun): {weekend_str}")
-            else:
-                print(f"{indent}  Weekend (Sat-Sun):")
-                for w in weekend_windows:
-                    print(f"{indent}    {self._format_hour_range(w['start_hour'], w['end_hour'])}")
-
-    def set_weekday_hours(self, username: str, start_hour: int, end_hour: int,
-                          fill_empty_weekend: bool = False):
-        """Set allowed weekday (Mon-Fri) access hours for a user (replaces all windows).
-
-        With fill_empty_weekend, a weekend with no windows that is not denied
-        gets the same window.
+        With fill_empty_weekend, an unrestricted weekend gets the same window.
         """
-        try:
-            if not self._validate_hours(start_hour, end_hour):
-                return
-
-            user_control = self._load_user_control()
-
-            # Get or create user schedule and normalize to array format
-            if username not in user_control["daily_schedules"]:
-                user_control["daily_schedules"][username] = {"weekday": [], "weekend": []}
-
-            schedule = self._normalize_schedule(user_control["daily_schedules"][username])
-
-            # Set weekday schedule (single window, replaces all)
-            window = {"start_hour": start_hour, "end_hour": end_hour}
-            schedule["weekday"] = [window]
-            self._allow_day(schedule, "weekday")
-            fill_weekend = (fill_empty_weekend and not schedule.get("weekend")
-                            and not self._is_denied(schedule, "weekend"))
-            if fill_weekend:
-                schedule["weekend"] = [window.copy()]
-
-            user_control["daily_schedules"][username] = schedule
-            self._save_user_control(user_control)
-
-            print(f"Set weekday access hours for {username}: {self._format_hour_range(start_hour, end_hour)}")
-            print("User will be automatically logged out outside these hours (Mon-Fri)")
-            if fill_weekend:
-                print(f"Weekend (Sat-Sun) hours were unset and now match; change them with: "
-                      f"cmctl set-weekend-hours {username} START END")
-            elif not schedule.get("weekend") and not self._is_denied(schedule, "weekend"):
-                print(f"Weekend access is unrestricted; set it with: "
-                      f"cmctl set-weekend-hours {username} START END")
-
-        except Exception as e:
-            print(f"Error setting weekday hours: {e}")
-
-    def set_weekend_hours(self, username: str, start_hour: int, end_hour: int):
-        """Set allowed weekend (Sat-Sun) access hours for a user (replaces all windows)"""
-        try:
-            if not self._validate_hours(start_hour, end_hour):
-                return
-
-            user_control = self._load_user_control()
-
-            # Get or create user schedule and normalize to array format
-            if username not in user_control["daily_schedules"]:
-                user_control["daily_schedules"][username] = {"weekday": [], "weekend": []}
-
-            schedule = self._normalize_schedule(user_control["daily_schedules"][username])
-
-            # Set weekend schedule (single window, replaces all)
-            window = {"start_hour": start_hour, "end_hour": end_hour}
-            schedule["weekend"] = [window]
-            self._allow_day(schedule, "weekend")
-
-            user_control["daily_schedules"][username] = schedule
-            self._save_user_control(user_control)
-
-            print(f"Set weekend access hours for {username}: {self._format_hour_range(start_hour, end_hour)}")
-            print("User will be automatically logged out outside these hours (Sat-Sun)")
-            if not schedule.get("weekday") and not self._is_denied(schedule, "weekday"):
-                print(f"Weekday access is unrestricted; set it with: "
-                      f"cmctl set-weekday-hours {username} START END")
-
-        except Exception as e:
-            print(f"Error setting weekend hours: {e}")
-
-    def add_weekday_window(self, username: str, start_hour: int, end_hour: int):
-        """Add an additional weekday access window for a user"""
-        try:
-            if not self._validate_hours(start_hour, end_hour):
-                return
-
-            user_control = self._load_user_control()
-
-            if username not in user_control["daily_schedules"]:
-                user_control["daily_schedules"][username] = {"weekday": [], "weekend": []}
-
-            schedule = self._normalize_schedule(user_control["daily_schedules"][username])
-            window = {"start_hour": start_hour, "end_hour": end_hour}
-
-            # Check for duplicate
-            if window in schedule["weekday"]:
-                print(f"Window {self._format_hour_range(start_hour, end_hour)} already exists for weekdays")
-                return
-
-            schedule["weekday"].append(window)
-            self._allow_day(schedule, "weekday")
-            # Sort windows by start hour for cleaner display
-            schedule["weekday"].sort(key=lambda w: w["start_hour"])
-
-            user_control["daily_schedules"][username] = schedule
-            self._save_user_control(user_control)
-
-            print(f"Added weekday window for {username}: {self._format_hour_range(start_hour, end_hour)}")
-            print(f"Weekday windows: {self._format_windows(schedule['weekday'])}")
-
-        except Exception as e:
-            print(f"Error adding weekday window: {e}")
-
-    def add_weekend_window(self, username: str, start_hour: int, end_hour: int):
-        """Add an additional weekend access window for a user"""
-        try:
-            if not self._validate_hours(start_hour, end_hour):
-                return
-
-            user_control = self._load_user_control()
-
-            if username not in user_control["daily_schedules"]:
-                user_control["daily_schedules"][username] = {"weekday": [], "weekend": []}
-
-            schedule = self._normalize_schedule(user_control["daily_schedules"][username])
-            window = {"start_hour": start_hour, "end_hour": end_hour}
-
-            # Check for duplicate
-            if window in schedule["weekend"]:
-                print(f"Window {self._format_hour_range(start_hour, end_hour)} already exists for weekends")
-                return
-
-            schedule["weekend"].append(window)
-            self._allow_day(schedule, "weekend")
-            # Sort windows by start hour for cleaner display
-            schedule["weekend"].sort(key=lambda w: w["start_hour"])
-
-            user_control["daily_schedules"][username] = schedule
-            self._save_user_control(user_control)
-
-            print(f"Added weekend window for {username}: {self._format_hour_range(start_hour, end_hour)}")
-            print(f"Weekend windows: {self._format_windows(schedule['weekend'])}")
-
-        except Exception as e:
-            print(f"Error adding weekend window: {e}")
-
-    def remove_weekday_window(self, username: str, start_hour: int, end_hour: int):
-        """Remove a weekday access window for a user"""
-        try:
-            user_control = self._load_user_control()
-
-            if username not in user_control["daily_schedules"]:
-                print(f"No schedule found for user {username}")
-                return
-
-            schedule = self._normalize_schedule(user_control["daily_schedules"][username])
-            window = {"start_hour": start_hour, "end_hour": end_hour}
-
-            if window not in schedule["weekday"]:
-                print(f"Window {self._format_hour_range(start_hour, end_hour)} not found in weekday schedule")
-                return
-
-            schedule["weekday"].remove(window)
-            user_control["daily_schedules"][username] = schedule
-            self._save_user_control(user_control)
-
-            print(f"Removed weekday window for {username}: {self._format_hour_range(start_hour, end_hour)}")
-            if schedule["weekday"]:
-                print(f"Remaining weekday windows: {self._format_windows(schedule['weekday'])}")
-            else:
-                print("No weekday windows remaining - weekday access is now unrestricted")
-
-        except Exception as e:
-            print(f"Error removing weekday window: {e}")
-
-    def remove_weekend_window(self, username: str, start_hour: int, end_hour: int):
-        """Remove a weekend access window for a user"""
-        try:
-            user_control = self._load_user_control()
-
-            if username not in user_control["daily_schedules"]:
-                print(f"No schedule found for user {username}")
-                return
-
-            schedule = self._normalize_schedule(user_control["daily_schedules"][username])
-            window = {"start_hour": start_hour, "end_hour": end_hour}
-
-            if window not in schedule["weekend"]:
-                print(f"Window {self._format_hour_range(start_hour, end_hour)} not found in weekend schedule")
-                return
-
-            schedule["weekend"].remove(window)
-            user_control["daily_schedules"][username] = schedule
-            self._save_user_control(user_control)
-
-            print(f"Removed weekend window for {username}: {self._format_hour_range(start_hour, end_hour)}")
-            if schedule["weekend"]:
-                print(f"Remaining weekend windows: {self._format_windows(schedule['weekend'])}")
-            else:
-                print("No weekend windows remaining - weekend access is now unrestricted")
-
-        except Exception as e:
-            print(f"Error removing weekend window: {e}")
-
-    def _clear_windows(self, username: str, day_type: str):
-        """Clear every access window of one day type, leaving that day unrestricted"""
-        label = "Weekday" if day_type == "weekday" else "Weekend"
+        window = self._window(start_hour, end_hour)
+        if window is None:
+            return
         user_control = self._load_user_control()
+        sched = self._user_schedule(user_control, username)
+        schedule.set_window(sched, day, window)
+        fill_weekend = fill_empty_weekend and schedule.is_unrestricted(sched, "weekend")
+        if fill_weekend:
+            schedule.set_window(sched, "weekend", dict(window))
+        self._store_schedule(user_control, username, sched)
 
+        days = "Mon-Fri" if day == "weekday" else "Sat-Sun"
+        other = self._other_day(day)
+        print(f"Set {day} access hours for {username}: "
+              f"{schedule.format_hour_range(start_hour, end_hour)}")
+        print(f"User will be automatically logged out outside these hours ({days})")
+        if fill_weekend:
+            print(f"Weekend (Sat-Sun) hours were unset and now match; change them with: "
+                  f"cmctl set-weekend-hours {username} START END")
+        elif schedule.is_unrestricted(sched, other):
+            print(f"{other.capitalize()} access is unrestricted; set it with: "
+                  f"cmctl set-{other}-hours {username} START END")
+
+    def add_window(self, username: str, day: str, start_hour: int, end_hour: int):
+        """Add an access window to a day type"""
+        window = self._window(start_hour, end_hour)
+        if window is None:
+            return
+        user_control = self._load_user_control()
+        sched = self._user_schedule(user_control, username)
+        if not schedule.add_window(sched, day, window):
+            print(f"Window {schedule.format_hour_range(start_hour, end_hour)} "
+                  f"already exists for {day}s")
+            return
+        self._store_schedule(user_control, username, sched)
+        print(f"Added {day} window for {username}: "
+              f"{schedule.format_hour_range(start_hour, end_hour)}")
+        print(f"{day.capitalize()} windows: {schedule.format_windows(sched[day])}")
+
+    def remove_window(self, username: str, day: str, start_hour: int, end_hour: int):
+        """Remove an access window from a day type"""
+        user_control = self._load_user_control()
         if username not in user_control["daily_schedules"]:
-            print(f"{label} access for {username} is already unrestricted")
+            print(f"No schedule found for user {username}")
             return
-
-        schedule = self._normalize_schedule(user_control["daily_schedules"][username])
-        if not schedule.get(day_type) and not self._is_denied(schedule, day_type):
-            print(f"{label} access for {username} is already unrestricted")
+        sched = self._user_schedule(user_control, username)
+        window = {"start_hour": start_hour, "end_hour": end_hour}
+        if not schedule.remove_window(sched, day, window):
+            print(f"Window {schedule.format_hour_range(start_hour, end_hour)} "
+                  f"not found in {day} schedule")
             return
-
-        schedule[day_type] = []
-        self._allow_day(schedule, day_type)
-        other = "weekend" if day_type == "weekday" else "weekday"
-        if schedule.get(other) or self._is_denied(schedule, other):
-            user_control["daily_schedules"][username] = schedule
-            print(f"Cleared {day_type} windows for {username}; "
-                  f"{day_type} access is now unrestricted")
-            print(f"{'Weekend' if other == 'weekend' else 'Weekday'} access: "
-                  f"{self._format_day(schedule, other)}")
+        self._store_schedule(user_control, username, sched)
+        print(f"Removed {day} window for {username}: "
+              f"{schedule.format_hour_range(start_hour, end_hour)}")
+        if sched[day]:
+            print(f"Remaining {day} windows: {schedule.format_windows(sched[day])}")
         else:
-            # Both day types are empty, which is what having no entry means;
-            # drop the entry rather than leave an empty one behind.
-            del user_control["daily_schedules"][username]
-            print(f"Cleared {day_type} windows for {username}; "
-                  f"access is now unrestricted at any time")
+            print(f"No {day} windows remaining - {day} access is now unrestricted")
 
-        self._save_user_control(user_control)
-
-    def _deny_access(self, username: str, day_type: str):
-        """Deny all access on one day type, replacing any windows it had"""
+    def clear_windows(self, username: str, day: str):
+        """Make a day type unrestricted"""
         user_control = self._load_user_control()
-        schedule = self._normalize_schedule(
-            user_control["daily_schedules"].get(username, {"weekday": [], "weekend": []}))
-
-        if self._is_denied(schedule, day_type):
-            print(f"{username} already has no {day_type} access")
+        sched = self._user_schedule(user_control, username)
+        label = day.capitalize()
+        if schedule.is_unrestricted(sched, day):
+            print(f"{label} access for {username} is already unrestricted")
             return
+        schedule.clear(sched, day)
+        self._store_schedule(user_control, username, sched)
+        if schedule.is_empty(sched):
+            print(f"Cleared {day} windows for {username}; "
+                  f"access is now unrestricted at any time")
+        else:
+            other = self._other_day(day)
+            print(f"Cleared {day} windows for {username}; {day} access is now unrestricted")
+            print(f"{other.capitalize()} access: {schedule.format_day(sched, other)}")
 
-        schedule[day_type] = []
-        schedule["no_access"] = schedule.get("no_access", []) + [day_type]
-        user_control["daily_schedules"][username] = schedule
-        self._save_user_control(user_control)
-
-        days = "Mon-Fri" if day_type == "weekday" else "Sat-Sun"
-        print(f"{username} now has no {day_type} access ({days}) and will be logged out")
-        print(f"Restore it with: cmctl set-{day_type}-hours {username} START END, "
-              f"or cmctl clear-{day_type}-windows {username} for unrestricted access")
-
-    def deny_weekday_access(self, username: str):
-        """Deny all weekday access for a user"""
-        try:
-            self._deny_access(username, "weekday")
-        except Exception as e:
-            print(f"Error denying weekday access: {e}")
-
-    def deny_weekend_access(self, username: str):
-        """Deny all weekend access for a user"""
-        try:
-            self._deny_access(username, "weekend")
-        except Exception as e:
-            print(f"Error denying weekend access: {e}")
-
-    def clear_weekday_windows(self, username: str):
-        """Remove all weekday access windows, leaving weekdays unrestricted"""
-        try:
-            self._clear_windows(username, "weekday")
-        except Exception as e:
-            print(f"Error clearing weekday windows: {e}")
-
-    def clear_weekend_windows(self, username: str):
-        """Remove all weekend access windows, leaving weekends unrestricted"""
-        try:
-            self._clear_windows(username, "weekend")
-        except Exception as e:
-            print(f"Error clearing weekend windows: {e}")
+    def deny_access(self, username: str, day: str):
+        """Deny all access on a day type, replacing any windows it had"""
+        user_control = self._load_user_control()
+        sched = self._user_schedule(user_control, username)
+        if schedule.is_denied(sched, day):
+            print(f"{username} already has no {day} access")
+            return
+        schedule.deny(sched, day)
+        self._store_schedule(user_control, username, sched)
+        days = "Mon-Fri" if day == "weekday" else "Sat-Sun"
+        print(f"{username} now has no {day} access ({days}) and will be logged out")
+        print(f"Restore it with: cmctl set-{day}-hours {username} START END, "
+              f"or cmctl clear-{day}-windows {username} for unrestricted access")
 
     def clear_user_hours(self, username: str):
         """Remove a user's access schedule entirely, allowing access at any time"""
-        try:
-            user_control = self._load_user_control()
-            if username not in user_control["daily_schedules"]:
-                print(f"Access hours for {username} are already unrestricted")
-                return
+        user_control = self._load_user_control()
+        if username not in user_control["daily_schedules"]:
+            print(f"Access hours for {username} are already unrestricted")
+            return
+        del user_control["daily_schedules"][username]
+        self._save_user_control(user_control)
+        print(f"Cleared all access hours for {username}; "
+              f"access is now unrestricted at any time")
 
-            del user_control["daily_schedules"][username]
-            self._save_user_control(user_control)
-            print(f"Cleared all access hours for {username}; "
-                  f"access is now unrestricted at any time")
-        except Exception as e:
-            print(f"Error clearing access hours: {e}")
-
-    def set_user_hours(self, username: str, start_hour: int, end_hour: int):
-        """Set weekday access hours, applying them to an unset weekend as well"""
-        self.set_weekday_hours(username, start_hour, end_hour, fill_empty_weekend=True)
-    
     def show_user_status(self, username: str = None):
         """Show user account status"""
         try:
@@ -989,8 +715,8 @@ class ChildMinderManager:
                 
                 # Check access hours
                 if username in user_control.get("daily_schedules", {}):
-                    schedule = user_control["daily_schedules"][username]
-                    self._print_schedule(schedule)
+                    for line in schedule.describe(self._user_schedule(user_control, username)):
+                        print(line)
                 else:
                     print(f"Access Hours: Unrestricted")
             else:
@@ -1011,9 +737,11 @@ class ChildMinderManager:
                 schedules = user_control.get("daily_schedules", {})
                 if schedules:
                     print("\n=== Users with Access Hours ===")
-                    for user, schedule in schedules.items():
+                    for user in schedules:
                         print(f"\n{user}:")
-                        self._print_schedule(schedule, indent="  ")
+                        for line in schedule.describe(self._user_schedule(user_control, user),
+                                                      indent="  "):
+                            print(line)
                         
         except Exception as e:
             print(f"Error showing user status: {e}")
@@ -1234,28 +962,19 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
         manager.disable_user_account(args.username, args.reason, args.hours)
     elif args.command == 'enable-user':
         manager.enable_user_account(args.username)
-    elif args.command == 'set-weekday-hours':
-        manager.set_weekday_hours(args.username, args.start, args.end)
-    elif args.command == 'set-weekend-hours':
-        manager.set_weekend_hours(args.username, args.start, args.end)
+    elif args.command in ('set-weekday-hours', 'set-weekend-hours'):
+        manager.set_hours(args.username, args.command.split('-')[1], args.start, args.end)
     elif args.command == 'set-user-hours':
-        manager.set_user_hours(args.username, args.start, args.end)
-    elif args.command == 'add-weekday-window':
-        manager.add_weekday_window(args.username, args.start, args.end)
-    elif args.command == 'add-weekend-window':
-        manager.add_weekend_window(args.username, args.start, args.end)
-    elif args.command == 'remove-weekday-window':
-        manager.remove_weekday_window(args.username, args.start, args.end)
-    elif args.command == 'remove-weekend-window':
-        manager.remove_weekend_window(args.username, args.start, args.end)
-    elif args.command == 'clear-weekday-windows':
-        manager.clear_weekday_windows(args.username)
-    elif args.command == 'clear-weekend-windows':
-        manager.clear_weekend_windows(args.username)
-    elif args.command == 'deny-weekday-access':
-        manager.deny_weekday_access(args.username)
-    elif args.command == 'deny-weekend-access':
-        manager.deny_weekend_access(args.username)
+        manager.set_hours(args.username, "weekday", args.start, args.end,
+                          fill_empty_weekend=True)
+    elif args.command in ('add-weekday-window', 'add-weekend-window'):
+        manager.add_window(args.username, args.command.split('-')[1], args.start, args.end)
+    elif args.command in ('remove-weekday-window', 'remove-weekend-window'):
+        manager.remove_window(args.username, args.command.split('-')[1], args.start, args.end)
+    elif args.command in ('clear-weekday-windows', 'clear-weekend-windows'):
+        manager.clear_windows(args.username, args.command.split('-')[1])
+    elif args.command in ('deny-weekday-access', 'deny-weekend-access'):
+        manager.deny_access(args.username, args.command.split('-')[1])
     elif args.command == 'clear-user-hours':
         manager.clear_user_hours(args.username)
     elif args.command == 'user-status':
