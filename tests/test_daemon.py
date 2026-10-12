@@ -309,6 +309,13 @@ class MonitorPassTest(MinderTestCase):
         self.assertEqual(self.terminated, [])
         minder.emit_warning.assert_called_once()
 
+    def test_warning_names_the_application_not_the_pattern(self):
+        minder = self.make_minder({"limited_processes": {"minecraft*": 5}})
+        self.run_pass(minder, [FakeProc(10, "MinecraftLauncher", KID_UID),
+                               FakeProc(11, "minecraft-helper", KID_UID)])
+        message = minder.emit_warning.call_args.args[2]
+        self.assertTrue(message.startswith("MinecraftLauncher has 5 minutes remaining"), message)
+
     def test_group_over_limit_terminates_whole_group(self):
         minder = self.make_minder({"process_groups": {"games": ["steam*", "roblox*"]},
                                    "group_limits": {"games": 1}})
@@ -372,6 +379,23 @@ class EndSessionTest(MinderTestCase):
                                return_value=[FakeProc(10, "bash", KID_UID)]):
             minder.end_user_session("kid", "again")
         minder.run_command.assert_called_once()
+
+
+class UsageSummaryTest(MinderTestCase):
+    def test_limit_is_found_for_any_pattern_key(self):
+        minder = self.make_minder({"limited_processes": {"[Mm]inecraft": 60}})
+        minder.update_usage("kid", "[Mm]inecraft", 600)
+        with self.assertLogs("child_minder", "INFO") as logs:
+            minder.log_usage_summary()
+        self.assertTrue(any("[Mm]inecraft" in line and "Remaining: 50 minutes" in line
+                            for line in logs.output), logs.output)
+
+    def test_monitored_key_has_no_remaining_time(self):
+        minder = self.make_minder({"monitored_processes": ["code"]})
+        minder.update_usage("kid", "code", 600)
+        with self.assertLogs("child_minder", "INFO") as logs:
+            minder.log_usage_summary()
+        self.assertFalse(any("Remaining" in line for line in logs.output))
 
 
 class UserControlTest(MinderTestCase):

@@ -449,8 +449,13 @@ class ChildMinder:
         """Round remaining seconds up to whole minutes for display"""
         return max(0, math.ceil(remaining_seconds / 60))
 
-    def maybe_warn_process(self, username: str, key: str, remaining_seconds: float):
-        """Warn about an individual process limit if a threshold has just been crossed"""
+    def maybe_warn_process(self, username: str, key: str, app_name: str,
+                           remaining_seconds: float):
+        """Warn about an individual process limit if a threshold has just been crossed.
+
+        The warning names app_name, a process seen under the limit, because key
+        is a config pattern such as "minecraft*" that means nothing to the user.
+        """
         consumed = self.warned_limits.setdefault((username, key), set())
         if self.consume_warning(consumed, remaining_seconds) is None:
             return
@@ -458,7 +463,7 @@ class ChildMinder:
         self.emit_warning(
             username,
             "Time Limit Warning" if minutes > 1 else "FINAL WARNING",
-            f"{key} has {minutes} minute{'s' if minutes != 1 else ''} remaining today.",
+            f"{app_name} has {minutes} minute{'s' if minutes != 1 else ''} remaining today.",
             minutes,
             f"{key} time limit",
         )
@@ -977,6 +982,7 @@ class ChildMinder:
         tracked = []            # [(proc, username, limit_key, group_name)]
         active_users = set()
         limited_keys = {}       # {(username, key): limit_seconds}
+        app_names = {}          # {(username, key): first process name seen}
         monitored_keys = set()  # {(username, key)}
         seen_groups = set()     # {(username, group)}
         limited_groups = {}     # {(username, group): limit_seconds}
@@ -1008,6 +1014,7 @@ class ChildMinder:
                 active_users.add(username)
                 if limit_key:
                     limited_keys[(username, limit_key)] = limit_seconds
+                    app_names.setdefault((username, limit_key), process_name)
                 elif usage_key:
                     monitored_keys.add((username, usage_key))
                 if group_name:
@@ -1032,7 +1039,8 @@ class ChildMinder:
             if usage >= limit:
                 over_keys.add((username, key))
             else:
-                self.maybe_warn_process(username, key, limit - usage)
+                self.maybe_warn_process(username, key, app_names[(username, key)],
+                                        limit - usage)
 
         for username, key in monitored_keys - set(limited_keys):
             self.update_usage(username, key, elapsed)
@@ -1090,9 +1098,9 @@ class ChildMinder:
             for user, processes in self.daily_usage.items():
                 for process, seconds in processes.items():
                     minutes = seconds / 60
-                    _, limit = self.get_process_limit(process)
-                    if limit:
-                        remaining = max(0, (limit - seconds) / 60)
+                    limit_minutes = self.config.get("limited_processes", {}).get(process)
+                    if limit_minutes:
+                        remaining = max(0, limit_minutes - minutes)
                         self.logger.info(f"  User: {user}, Process: {process}, Time: {minutes:.1f} minutes (Remaining: {remaining:.0f} minutes)")
                     else:
                         self.logger.info(f"  User: {user}, Process: {process}, Time: {minutes:.1f} minutes")
