@@ -61,6 +61,14 @@ function showError(message) {
   const box = $("error");
   box.textContent = message || "";
   box.hidden = !message;
+  if (message) $("message").hidden = true;
+}
+
+function showMessage(message) {
+  const box = $("message");
+  box.textContent = message || "";
+  box.hidden = !message;
+  if (message) $("error").hidden = true;
 }
 
 // -- formatting --
@@ -96,6 +104,59 @@ function meter(label, line) {
     limit === null ? null : el("div", { class: "bar" }, fill));
 }
 
+// -- changes --
+
+// Run cmctl commands through the server, report the outcome and redraw
+async function run(commands, confirmText) {
+  if (confirmText && !window.confirm(confirmText)) return false;
+  try {
+    const data = await api("POST", "/api/commands", { commands });
+    // Every config change prints this; the line after it says what changed
+    showMessage(data.output.split("\n")
+      .filter((line) => line !== "Configuration saved successfully").join("\n"));
+    await refresh();
+    return true;
+  } catch (e) {
+    showError(e.message);
+    return false;
+  }
+}
+
+function cmd(command, ...args) {
+  return { command, args };
+}
+
+function button(label, onclick, cls = "secondary") {
+  return el("button", { type: "button", class: cls, onclick }, label);
+}
+
+function hourSelect(value) {
+  const select = el("select", {});
+  for (let h = 0; h < 24; h++) {
+    const option = el("option", { value: String(h) }, `${String(h).padStart(2, "0")}:00`);
+    if (h === value) option.selected = true;
+    select.append(option);
+  }
+  return select;
+}
+
+function minutesInput(value) {
+  const input = el("input", { type: "number", min: "0", step: "1", inputmode: "numeric",
+                              placeholder: "minutes" });
+  if (value !== null && value !== undefined) input.value = String(value);
+  return input;
+}
+
+function readMinutes(input) {
+  return input.value.trim() === "" ? null : Number(input.value);
+}
+
+// A form row: inputs and a submit button, submitted by Enter or the button
+function inlineForm(fields, label, onsubmit) {
+  return el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); onsubmit(); } },
+    ...fields, el("button", { type: "submit" }, label));
+}
+
 // -- today --
 
 function userStatus(user) {
@@ -105,6 +166,28 @@ function userStatus(user) {
   }
   if (!user.allowed_now) return el("span", { class: "badge warn" }, "Outside access hours");
   return el("span", { class: "badge ok" }, "Allowed now");
+}
+
+const LOCK_CHOICES = [["0.5", "30 minutes"], ["1", "1 hour"], ["2", "2 hours"],
+                      ["4", "4 hours"], ["24", "1 day"], ["", "Until unlocked"]];
+
+function lockControls(user) {
+  if (user.disabled) {
+    return el("div", { class: "actions" },
+      button("Unlock", () => run([cmd("enable-user", user.name)]), ""));
+  }
+  const duration = el("select", {},
+    LOCK_CHOICES.map(([value, label]) => el("option", { value }, label)));
+  const reason = el("input", { type: "text", placeholder: "Reason (optional)", maxlength: "200" });
+  return el("div", { class: "actions" },
+    inlineForm([duration, reason], "Lock", () => {
+      const options = { hours: duration.value === "" ? null : Number(duration.value) };
+      if (reason.value.trim()) options.reason = reason.value.trim();
+      const label = duration.selectedOptions[0].textContent.toLowerCase();
+      run([{ command: "disable-user", args: [user.name], options }],
+        `Lock ${user.name} out ${duration.value === "" ? "until unlocked" : `for ${label}`}? ` +
+        "This ends their session now.");
+    }));
 }
 
 function renderUser(user) {
@@ -125,7 +208,8 @@ function renderUser(user) {
   card.append(el("h3", {}, "Access hours"),
     el("ul", { class: "plain" },
       el("li", {}, `Weekdays: ${user.schedule_days.weekday}`),
-      el("li", {}, `Weekends: ${user.schedule_days.weekend}`)));
+      el("li", {}, `Weekends: ${user.schedule_days.weekend}`)),
+    lockControls(user));
   return card;
 }
 
@@ -141,7 +225,14 @@ function renderOverview(data) {
     el("p", { class: "muted" },
       `Today is a ${data.day_type}. Usage last saved ${when(data.state_saved)}; ` +
       `the service saves it every minute.`),
-    data.warnings.map((w) => el("p", { class: "notice" }, w)));
+    ...data.warnings.map((w) => el("p", { class: "notice" }, w)),
+    el("div", { class: "actions" },
+      data.monitoring
+        ? button("Turn monitoring off", () => run([cmd("disable")],
+            "Turn monitoring off? Limits and access hours stop being enforced until it is turned back on."))
+        : button("Turn monitoring on", () => run([cmd("enable")]), ""),
+      button("Reset today's usage", () => run([cmd("reset")],
+        "Reset today's usage for every user? Everyone gets their full time back."))));
 
   $("users").replaceChildren(...(data.users.length
     ? data.users.map(renderUser)
@@ -150,38 +241,170 @@ function renderOverview(data) {
 
 // -- settings --
 
-function listCard(title, items, empty) {
-  return el("div", { class: "card" }, el("h2", {}, title),
-    items.length ? el("ul", { class: "plain" }, items.map((i) => el("li", {}, i)))
-      : el("p", { class: "muted" }, empty));
+function section(title, ...children) {
+  return el("div", { class: "card" }, el("h2", {}, title), ...children);
 }
 
-function renderSettings(data) {
-  const c = data.config;
-  const users = c.monitored_users === null ? ["None (invalid monitored_users)"]
-    : c.monitored_users.length ? c.monitored_users : ["All regular users"];
-  const daily = Object.entries(c.user_daily_limits).map(([user, entry]) => {
-    const part = (day) => entry[day] === null ? `${day}: no limit` : `${day}: ${entry[day]} min`;
-    return `${user}: ${part("weekday")}, ${part("weekend")}`;
+function itemRow(label, ...controls) {
+  return el("li", { class: "item" }, el("span", { class: "item-label" }, label),
+    el("span", { class: "item-controls" }, ...controls));
+}
+
+function textInput(placeholder) {
+  return el("input", { type: "text", placeholder, maxlength: "200" });
+}
+
+function monitoredUsersSection(c) {
+  const name = textInput("Username");
+  const note = c.monitored_users === null
+    ? el("p", { class: "notice" }, "monitored_users is invalid, so nobody is monitored.")
+    : c.monitored_users.length === 0
+      ? el("p", { class: "muted" }, "Empty: every regular user is monitored.")
+      : null;
+  return section("Monitored users", note,
+    el("ul", { class: "plain" }, (c.monitored_users || []).map((user) =>
+      itemRow(user, button("Remove", () => run([cmd("remove-user", user)],
+        `Stop monitoring ${user}?`), "danger")))),
+    inlineForm([name], "Add", () => run([cmd("add-user", name.value.trim())])));
+}
+
+// Commands that make a user's daily limits match two inputs; blank is no limit
+function dailyLimitCommands(user, weekday, weekend) {
+  if (weekday === null && weekend === null) return [cmd("user-unlimit", user)];
+  if (weekday === weekend) return [cmd("user-limit", user, weekday)];
+  const commands = [];
+  // cmctl cannot clear one day type alone, so clear both and set the other
+  if (weekday === null || weekend === null) commands.push(cmd("user-unlimit", user));
+  if (weekday !== null) commands.push(cmd("user-weekday-limit", user, weekday));
+  if (weekend !== null) commands.push(cmd("user-weekend-limit", user, weekend));
+  return commands;
+}
+
+function dailyLimitsSection(c) {
+  const rows = Object.entries(c.user_daily_limits).map(([user, entry]) => {
+    const weekday = minutesInput(entry.weekday);
+    const weekend = minutesInput(entry.weekend);
+    return el("li", { class: "item" },
+      el("span", { class: "item-label" }, user),
+      inlineForm([el("label", { class: "compact" }, "Weekday", weekday),
+                  el("label", { class: "compact" }, "Weekend", weekend)], "Save",
+        () => run(dailyLimitCommands(user, readMinutes(weekday), readMinutes(weekend)))),
+      button("Remove", () => run([cmd("user-unlimit", user)],
+        `Remove ${user}'s daily limit?`), "danger"));
   });
+  const user = textInput("Username");
+  const minutes = minutesInput(null);
+  return section("Daily screen time limits",
+    el("p", { class: "muted" }, "Minutes per day. Leave a day blank for no limit; 0 allows no time."),
+    el("ul", { class: "plain" }, rows),
+    inlineForm([user, minutes], "Add",
+      () => run([cmd("user-limit", user.value.trim(), readMinutes(minutes))])));
+}
+
+function scheduleDay(user, day, sched) {
+  const label = day === "weekday" ? "Weekdays (Mon-Fri)" : "Weekends (Sat-Sun)";
+  const denied = (sched.no_access || []).includes(day);
+  const windows = sched[day];
+  const state = denied ? "No access" : windows.length ? null : "Unrestricted";
+  const start = hourSelect(15);
+  const end = hourSelect(20);
+  return el("div", { class: "day" },
+    el("h3", {}, label),
+    state ? el("p", {}, state) : el("ul", { class: "plain" }, windows.map((w) =>
+      itemRow(`${String(w.start_hour).padStart(2, "0")}:00 - ${String(w.end_hour).padStart(2, "0")}:00` +
+              (w.start_hour > w.end_hour ? " (overnight)" : ""),
+        button("Remove", () => run([cmd(`remove-${day}-window`, user, w.start_hour, w.end_hour)],
+          windows.length === 1 ? `This is the last window, so ${user} will have no ${day} access. Continue?`
+            : null), "danger")))),
+    inlineForm([start, el("span", {}, "to"), end], "Add window",
+      () => run([cmd(`add-${day}-window`, user, Number(start.value), Number(end.value))])),
+    el("div", { class: "actions" },
+      denied ? null : button("No access", () => run([cmd(`deny-${day}-access`, user)],
+        `Deny all ${day} access for ${user}?`)),
+      state === "Unrestricted" ? null
+        : button("Unrestricted", () => run([cmd(`clear-${day}-windows`, user)]))));
+}
+
+function scheduleSection(users) {
+  return section("Access hours",
+    el("p", { class: "muted" },
+      "Outside these hours the user is logged out. A window ends at the start of its end hour."),
+    ...users.map((user) => el("div", { class: "subsection" },
+      el("div", { class: "row" }, el("h3", { class: "user" }, user.name),
+        button("Clear all", () => run([cmd("clear-user-hours", user.name)],
+          `Allow ${user.name} access at any time?`))),
+      scheduleDay(user.name, "weekday", user.schedule),
+      scheduleDay(user.name, "weekend", user.schedule))));
+}
+
+function blockedSection(c) {
+  const name = textInput("Process name or pattern, e.g. steam*");
+  return section("Blocked applications",
+    el("ul", { class: "plain" }, c.blocked_processes.map((p) =>
+      itemRow(p, button("Unblock", () => run([cmd("unblock", p)]), "danger")))),
+    inlineForm([name], "Block", () => run([cmd("block", name.value.trim())])));
+}
+
+function appLimitsSection(c) {
+  const rows = Object.entries(c.limited_processes).map(([p, m]) => {
+    const minutes = minutesInput(m);
+    return el("li", { class: "item" }, el("span", { class: "item-label" }, p),
+      inlineForm([minutes], "Save", () => run([cmd("limit", p, readMinutes(minutes))])),
+      button("Remove", () => run([cmd("unlimit", p)]), "danger"));
+  });
+  const name = textInput("Process name or pattern");
+  const minutes = minutesInput(null);
+  return section("Application limits",
+    el("p", { class: "muted" }, "Minutes per day for each application."),
+    el("ul", { class: "plain" }, rows),
+    inlineForm([name, minutes], "Add",
+      () => run([cmd("limit", name.value.trim(), readMinutes(minutes))])));
+}
+
+function groupsSection(c) {
   const groups = Object.entries(c.process_groups).map(([group, patterns]) => {
-    const limit = c.group_limits[group];
-    return `${group}${limit === undefined ? "" : ` (${limit} min/day)`}: ${patterns.join(", ")}`;
+    const limit = minutesInput(c.group_limits[group]);
+    const member = textInput("Process name or pattern");
+    return el("div", { class: "subsection" },
+      el("h3", { class: "user" }, group),
+      el("ul", { class: "plain" }, patterns.map((p) =>
+        itemRow(p, button("Remove", () => run([cmd("remove-from-group", group, p)]), "danger")))),
+      inlineForm([member], "Add", () => run([cmd("add-to-group", group, member.value.trim())])),
+      el("div", { class: "actions" },
+        inlineForm([el("label", { class: "compact" }, "Limit", limit)], "Save limit", () => {
+          const minutes = readMinutes(limit);
+          run([minutes === null ? cmd("group-unlimit", group) : cmd("group-limit", group, minutes)]);
+        })));
   });
+  const name = textInput("Group name");
+  const first = textInput("First process");
+  return section("Groups",
+    el("p", { class: "muted" }, "Applications in a group share one daily limit. " +
+      "Leave the limit blank for none."),
+    ...groups,
+    el("h3", {}, "New group"),
+    inlineForm([name, first], "Create",
+      () => run([cmd("add-to-group", name.value.trim(), first.value.trim())])));
+}
+
+function renderSettings(data, overview) {
+  const c = data.config;
   const cards = [];
   if (data.warnings.length) {
     cards.push(el("div", { class: "card" },
-      data.warnings.map((w) => el("p", { class: "notice" }, w))));
+      ...data.warnings.map((w) => el("p", { class: "notice" }, w))));
   }
   $("settings").replaceChildren(...cards,
-    listCard("Monitored users", users, ""),
-    listCard("Daily screen time limits", daily, "No daily limits."),
-    listCard("Blocked applications", c.blocked_processes, "Nothing is blocked."),
-    listCard("Application limits",
-      Object.entries(c.limited_processes).map(([p, m]) => `${p}: ${m} min/day`),
-      "No application limits."),
-    listCard("Groups", groups, "No groups."),
-    listCard("Tracked applications", c.monitored_processes, "None."));
+    monitoredUsersSection(c),
+    dailyLimitsSection(c),
+    scheduleSection(overview.users),
+    blockedSection(c),
+    appLimitsSection(c),
+    groupsSection(c),
+    section("Tracked applications",
+      el("p", { class: "muted" }, "Logged but not limited. Edit monitored_processes in " +
+        "/etc/child-minder/config.json to change this list."),
+      el("ul", { class: "plain" }, c.monitored_processes.map((p) => el("li", {}, p)))));
 }
 
 // -- logs --
@@ -203,9 +426,13 @@ let currentTab = "today";
 async function refresh() {
   try {
     if (currentTab === "today") renderOverview(await api("GET", "/api/overview"));
-    else if (currentTab === "settings") renderSettings(await api("GET", "/api/config"));
+    else if (currentTab === "settings") {
+      const [config, overview] = await Promise.all(
+        [api("GET", "/api/config"), api("GET", "/api/overview")]);
+      renderSettings(config, overview);
+    }
     else if (currentTab === "logs") await loadLogs();
-    showError(null);
+    $("error").hidden = true;
   } catch (e) {
     if (e.status !== 401) showError(e.message);
   }
@@ -213,6 +440,7 @@ async function refresh() {
 
 function selectTab(name) {
   currentTab = name;
+  showMessage(null);
   for (const button of document.querySelectorAll("button.tab")) {
     button.classList.toggle("active", button.dataset.tab === name);
   }
@@ -239,7 +467,8 @@ function showApp() {
   selectTab(currentTab);
   clearInterval(refreshTimer);
   refreshTimer = setInterval(() => {
-    if (!document.hidden && currentTab === "today") refresh();
+    const typing = document.activeElement && document.activeElement.closest("form");
+    if (!document.hidden && currentTab === "today" && !typing) refresh();
   }, REFRESH_MS);
 }
 

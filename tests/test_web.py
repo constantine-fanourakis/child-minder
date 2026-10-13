@@ -4,10 +4,12 @@ The front end is tested against a broker running in-process; the Unix
 socket between them has tests of its own.
 """
 
+import fcntl
 import http.client
 import json
 import os
 import socket
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -49,7 +51,7 @@ class WebTestCase(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
         self.broker = broker.Broker(self.config_path, self.state_path, self.log_path,
-                                    self.user_control_path)
+                                    self.user_control_path, self.tmp / "broker.lock")
         # Through JSON, as over the socket
         self.app = web.WebApp(self.web_config_path, lambda request: json.loads(
             json.dumps(self.broker.handle(json.loads(json.dumps(request))))))
@@ -424,3 +426,145 @@ class BrokerSocketTest(unittest.TestCase):
         with self.assertRaises(web.ApiError) as raised:
             app.ask_broker({"op": "logs"})
         self.assertEqual(raised.exception.status, 502)
+
+
+class CommandTest(WebTestCase):
+    def setUp(self):
+        super().setUp()
+        self.login()
+        self.returncodes = {}
+        self.run_mock.side_effect = self.fake_run
+
+    def fake_run(self, argv, **kwargs):
+        name = argv[2]
+        return mock.Mock(returncode=self.returncodes.get(name, 0),
+                         stdout=f"ran {name}\n", stderr="")
+
+    def ran(self) -> list:
+        return [c.args[0][2:] for c in self.run_mock.call_args_list]
+
+    def post(self, *commands):
+        return self.request("POST", "/api/commands", {"commands": list(commands)})
+
+    def test_commands_run_cmctl_with_arguments_after_a_separator(self):
+        status, _, body = self.post({"command": "block", "args": ["-steam"]},
+                                    {"command": "limit", "args": ["minecraft*", 60]})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(self.ran(), [["block", "--", "-steam"],
+                                      ["limit", "--", "minecraft*", "60"]])
+        self.assertEqual(body["output"], "ran block\nran limit")
+        argv = self.run_mock.call_args.args[0]
+        self.assertEqual(argv[:2], [broker.sys.executable, str(broker.CMCTL)])
+
+    def test_command_without_arguments_has_no_separator(self):
+        self.post({"command": "reset"})
+        self.assertEqual(self.ran(), [["reset"]])
+
+    def test_options_are_passed_as_single_arguments(self):
+        self.post({"command": "disable-user", "args": ["kid"],
+                   "options": {"hours": 1.5, "reason": "-t 99"}})
+        self.assertEqual(self.ran(), [["disable-user", "--hours=1.5", "--reason=-t 99",
+                                       "--", "kid"]])
+
+    def test_unset_option_is_left_out(self):
+        self.post({"command": "disable-user", "args": ["kid"], "options": {"hours": None}})
+        self.assertEqual(self.ran(), [["disable-user", "--", "kid"]])
+
+    def test_failure_stops_the_batch_and_is_reported(self):
+        self.returncodes["unblock"] = 1
+        status, _, body = self.post({"command": "unblock", "args": ["steam"]},
+                                    {"command": "block", "args": ["other"]})
+        self.assertEqual(status, 422)
+        self.assertEqual(body["error"], "ran unblock")
+        self.assertEqual(self.ran(), [["unblock", "--", "steam"]])
+
+    def test_invalid_requests_run_nothing(self):
+        for commands in (
+                [{"command": "web-password"}],
+                [{"command": "config"}],
+                [{"command": "block"}],
+                [{"command": "block", "args": ["a", "b"]}],
+                [{"command": "block", "args": [""]}],
+                [{"command": "block", "args": ["a\nb"]}],
+                [{"command": "block", "args": ["x" * (broker.MAX_TEXT_LENGTH + 1)]}],
+                [{"command": "limit", "args": ["a", "60"]}],
+                [{"command": "limit", "args": ["a", True]}],
+                [{"command": "limit", "args": ["a", 1.5]}],
+                [{"command": "block", "args": ["a"], "options": {"hours": 1}}],
+                [{"command": "disable-user", "args": ["kid"], "options": {"hours": "1"}}],
+                [{"command": "block", "args": ["a"]}, {"command": "nope"}],
+                [], "block", [{"command": "reset"}] * (broker.MAX_BATCH + 1)):
+            status, _, _ = self.request("POST", "/api/commands", {"commands": commands})
+            self.assertEqual(status, 400, commands)
+        self.assertEqual(self.ran(), [])
+
+    def test_commands_run_while_holding_the_command_lock(self):
+        held = []
+
+        def fake_run(argv, **kwargs):
+            fd = os.open(self.tmp / "broker.lock", os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(False)
+            except BlockingIOError:
+                held.append(True)
+            finally:
+                os.close(fd)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+        self.run_mock.side_effect = fake_run
+        self.post({"command": "reset"}, {"command": "enable"})
+        self.assertEqual(held, [True, True])
+
+    def test_account_commands_are_limited_to_monitored_users(self):
+        for command in ("disable-user", "enable-user"):
+            status, _, body = self.post({"command": command, "args": ["parent"]})
+            self.assertEqual(status, 403, command)
+            self.assertIn("not a monitored user", body["error"])
+        self.assertEqual(self.post({"command": "block", "args": ["x"]},
+                                   {"command": "enable-user", "args": ["parent"]})[0], 403)
+        self.assertEqual(self.ran(), [])
+
+    def test_account_commands_follow_the_validated_monitored_users(self):
+        self.write(self.config_path, {"monitored_users": []})
+        self.assertEqual(self.post({"command": "enable-user", "args": ["parent"]})[0], 200)
+        self.write(self.config_path, {"monitored_users": "kid"})
+        self.assertEqual(self.post({"command": "enable-user", "args": ["kid"]})[0], 403)
+
+    def test_commands_need_the_csrf_token(self):
+        status, _, _ = self.request("POST", "/api/commands",
+                                    {"commands": [{"command": "reset"}]},
+                                    headers={"X-CSRF-Token": ""})
+        self.assertEqual(status, 403)
+        self.assertEqual(self.ran(), [])
+
+    def test_commands_need_a_session(self):
+        self.cookie = None
+        self.assertEqual(self.post({"command": "reset"})[0], 401)
+        self.assertEqual(self.ran(), [])
+
+    def test_unrunnable_cmctl_is_an_error(self):
+        self.run_mock.side_effect = FileNotFoundError("missing")
+        status, _, body = self.post({"command": "reset"})
+        self.assertEqual(status, 500)
+        self.assertIn("could not run cmctl", body["error"])
+
+
+@unittest.skipIf(os.geteuid() == 0, "as root cmctl would change the installed files")
+class CommandArgvTest(unittest.TestCase):
+    """The argv built for each command is one the real cmctl parses.
+
+    As a regular user cmctl parses the arguments, then stops at its root
+    check (exit 1) without touching anything; a parse error exits 2.
+    """
+
+    SAMPLES = {"text": "-name", "int": 5}
+
+    def test_every_command_parses(self):
+        for name, kinds in broker.COMMANDS.items():
+            request = {"command": name, "args": [self.SAMPLES[k] for k in kinds]}
+            if name == "disable-user":
+                request["options"] = {"hours": 1.5, "reason": "-r x"}
+            result = subprocess.run(broker.command_argv(request), capture_output=True,
+                                    text=True, timeout=30)
+            self.assertEqual(result.returncode, 1, (name, result.stdout, result.stderr))
+            self.assertIn("must be run as root", result.stdout, name)

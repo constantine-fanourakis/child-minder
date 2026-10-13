@@ -12,10 +12,15 @@ Responses are {"result": ...} or {"status": <HTTP status>, "error": message}.
 Reads come from the files the daemon and cmctl keep, through the same
 modules they use. The usage counters are the ones the daemon saves to
 state.json once a minute, so they lag the running daemon by up to a minute.
+
+Every change runs a cmctl subcommand from COMMANDS, so the web UI edits
+the files exactly as cmctl does, locks and service reload included.
 """
 
+import fcntl
 import json
 import logging
+import os
 import pwd
 import socket
 import struct
@@ -33,16 +38,62 @@ from childminder import store
 from childminder import webauth
 
 BROKER_SOCKET = "/run/child-minder-broker.sock"
+COMMAND_LOCK_PATH = "/run/child-minder-broker.lock"
 CONFIG_PATH = "/etc/child-minder/config.json"
 STATE_PATH = "/var/lib/child-minder/state.json"
 LOG_PATH = "/var/log/child-minder/minder.log"
 USER_CONTROL_PATH = "/var/lib/child-minder/user_control.json"
 
 SERVICE = "child-minder"
+CMCTL = Path(__file__).resolve().parent.parent / "cmctl.py"
 MAX_REQUEST_BYTES = 64 * 1024
 REQUEST_TIMEOUT = 10
 MAX_LOG_LINES = 1000
 LOG_TAIL_BYTES = 256 * 1024
+MAX_TEXT_LENGTH = 200
+MAX_BATCH = 10
+COMMAND_TIMEOUT = 60
+
+# cmctl subcommands the web UI may run: the kinds of their positional
+# arguments, and of the --name=value options they accept
+COMMANDS = {
+    "block": ("text",),
+    "unblock": ("text",),
+    "limit": ("text", "int"),
+    "unlimit": ("text",),
+    "add-to-group": ("text", "text"),
+    "remove-from-group": ("text", "text"),
+    "group-limit": ("text", "int"),
+    "group-unlimit": ("text",),
+    "user-limit": ("text", "int"),
+    "user-weekday-limit": ("text", "int"),
+    "user-weekend-limit": ("text", "int"),
+    "user-unlimit": ("text",),
+    "add-user": ("text",),
+    "remove-user": ("text",),
+    "enable": (),
+    "disable": (),
+    "reset": (),
+    "disable-user": ("text",),
+    "enable-user": ("text",),
+    "set-weekday-hours": ("text", "int", "int"),
+    "set-weekend-hours": ("text", "int", "int"),
+    "add-weekday-window": ("text", "int", "int"),
+    "add-weekend-window": ("text", "int", "int"),
+    "remove-weekday-window": ("text", "int", "int"),
+    "remove-weekend-window": ("text", "int", "int"),
+    "clear-weekday-windows": ("text",),
+    "clear-weekend-windows": ("text",),
+    "deny-weekday-access": ("text",),
+    "deny-weekend-access": ("text",),
+    "clear-user-hours": ("text",),
+}
+COMMAND_OPTIONS = {
+    "disable-user": {"hours": "number", "reason": "text"},
+}
+# Commands whose first argument must be a monitored user, so the web
+# password cannot lock out an account the daemon does not watch
+MONITORED_USER_COMMANDS = {"disable-user", "enable-user"}
 
 logger = logging.getLogger("childminder.broker")
 
@@ -51,6 +102,60 @@ class RequestError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status = status
+
+
+def check_value(kind: str, value, what: str) -> str:
+    """Return value as a cmctl argument if it is of kind, else raise RequestError"""
+    if kind == "text":
+        valid = (isinstance(value, str) and 0 < len(value) <= MAX_TEXT_LENGTH
+                 and not any(ord(c) < 32 or ord(c) == 127 for c in value))
+    elif kind == "int":
+        valid = isinstance(value, int) and not isinstance(value, bool)
+    else:
+        valid = cfg.is_number(value)
+    if not valid:
+        raise RequestError(HTTPStatus.BAD_REQUEST, f"Invalid {what}")
+    return str(value)
+
+
+def command_argv(request) -> list:
+    """Turn {"command", "args", "options"} into a cmctl argv, or raise RequestError.
+
+    Positional arguments follow "--", so a value starting with "-" is never
+    read as an option. argparse refuses a "--" with nothing after it.
+    """
+    if not isinstance(request, dict) or request.get("command") not in COMMANDS:
+        raise RequestError(HTTPStatus.BAD_REQUEST, "Unknown command")
+    name = request["command"]
+    kinds = COMMANDS[name]
+    args = request.get("args", [])
+    options = request.get("options", {})
+    if not isinstance(args, list) or len(args) != len(kinds):
+        raise RequestError(HTTPStatus.BAD_REQUEST, f"{name} takes {len(kinds)} arguments")
+    if not isinstance(options, dict):
+        raise RequestError(HTTPStatus.BAD_REQUEST, "Invalid options")
+    allowed = COMMAND_OPTIONS.get(name, {})
+    argv = [sys.executable, str(CMCTL), name]
+    for option, value in options.items():
+        if option not in allowed:
+            raise RequestError(HTTPStatus.BAD_REQUEST, f"{name} has no option {option}")
+        if value is not None:
+            argv.append(f"--{option}={check_value(allowed[option], value, option)}")
+    if args:
+        argv += ["--"] + [check_value(kind, value, f"argument {i + 1} of {name}")
+                          for i, (kind, value) in enumerate(zip(kinds, args))]
+    return argv
+
+
+def is_monitored(config: dict, username: str) -> bool:
+    """Whether the daemon watches username, by the validated monitored_users.
+
+    An empty list means every regular account; cmctl refuses the others.
+    """
+    users = config["monitored_users"]
+    if users is None:
+        return False
+    return not users or username in users
 
 
 def tail_lines(path: Path, count: int) -> list:
@@ -80,10 +185,12 @@ class Broker:
         "overview": "overview",
         "config": "config_view",
         "logs": "logs",
+        "commands": "run_commands",
     }
 
     def __init__(self, config_path: Path, state_path: Path, log_path: Path,
-                 user_control_path: Path):
+                 user_control_path: Path, command_lock_path: Path = Path(COMMAND_LOCK_PATH)):
+        self.command_lock_path = Path(command_lock_path)
         self.config_path = Path(config_path)
         self.state_path = Path(state_path)
         self.log_path = Path(log_path)
@@ -197,6 +304,47 @@ class Broker:
             return {"lines": tail_lines(self.log_path, max(0, min(count, MAX_LOG_LINES)))}
         except OSError as e:
             raise RequestError(HTTPStatus.SERVICE_UNAVAILABLE, f"Could not read the log: {e}")
+
+
+    def run_commands(self, request: dict) -> dict:
+        """Run cmctl commands in order, stopping at the first that fails"""
+        commands = request.get("commands")
+        if not isinstance(commands, list) or not 0 < len(commands) <= MAX_BATCH:
+            raise RequestError(HTTPStatus.BAD_REQUEST,
+                               f"Expected a list of 1 to {MAX_BATCH} commands")
+        argvs = [command_argv(command) for command in commands]
+        client = request.get("client")
+        client = client if isinstance(client, str) else "unknown"
+
+        account_users = [c["args"][0] for c in commands
+                         if c["command"] in MONITORED_USER_COMMANDS]
+        if account_users:
+            config = self.effective_config([])
+            for user in account_users:
+                if not is_monitored(config, user):
+                    raise RequestError(HTTPStatus.FORBIDDEN,
+                                       f"{user} is not a monitored user")
+
+        output = []
+        # Broker processes run side by side, and cmctl rewrites config.json
+        # without a lock, so commands from different requests take turns
+        fd = os.open(self.command_lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            for argv in argvs:
+                logger.info(f"Web UI client {client} ran: cmctl {' '.join(argv[2:])}")
+                try:
+                    result = subprocess.run(argv, capture_output=True, text=True,
+                                            stdin=subprocess.DEVNULL, timeout=COMMAND_TIMEOUT)
+                except (OSError, subprocess.TimeoutExpired) as e:
+                    output.append(f"Error: could not run cmctl: {e}")
+                    raise RequestError(HTTPStatus.INTERNAL_SERVER_ERROR, "\n".join(output))
+                output.append((result.stdout + result.stderr).strip())
+                if result.returncode != 0:
+                    raise RequestError(HTTPStatus.UNPROCESSABLE_ENTITY, "\n".join(output))
+        finally:
+            os.close(fd)
+        return {"output": "\n".join(output)}
 
 
 def peer_allowed(conn: socket.socket) -> bool:
