@@ -147,16 +147,24 @@ class UserControlStore:
         finally:
             os.close(fd)
 
+    def save(self, data: dict):
+        """Write the file; the caller holds the lock"""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(self.path, data)
+
     @contextmanager
-    def update(self, warn: Optional[Warn] = None) -> Iterator[dict]:
+    def update(self, warn: Optional[Warn] = None,
+               on_save: Optional[Callable[[], None]] = None) -> Iterator[dict]:
         """Yield the current data under the lock, saving it afterwards if it changed.
 
-        Nothing is saved if the body raises.
+        on_save runs after a save, still under the lock. Nothing is saved if
+        the body raises.
         """
         with self.locked():
             data = self.load(warn)
             before = copy.deepcopy(data)
             yield data
             if data != before:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_json(self.path, data)
+                self.save(data)
+                if on_save:
+                    on_save()

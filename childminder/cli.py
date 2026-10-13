@@ -3,7 +3,6 @@ Child Minder Management Utility (cmctl)
 Provides easy management and reporting for the Child Minder system
 """
 
-import copy
 import json
 import sys
 import argparse
@@ -36,6 +35,17 @@ def run_command(argv: list) -> subprocess.CompletedProcess:
     return subprocess.run(argv, capture_output=True, text=True)
 
 
+def _print_warning(message: str):
+    print(f"Warning: {message}")
+
+
+def _exit_unreadable(error: Exception):
+    """Report a file cmctl cannot use and exit, hinting at sudo when not root"""
+    hint = " (try: sudo cmctl ...)" if os.geteuid() != 0 else ""
+    print(f"Error: {error}{hint}")
+    sys.exit(1)
+
+
 def service_is_active() -> bool:
     """Check whether the child-minder service is currently running"""
     result = subprocess.run(['systemctl', 'is-active', '--quiet', SERVICE], check=False)
@@ -54,14 +64,12 @@ class ChildMinderManager:
         try:
             return cfg.read_file(self.config_path)
         except cfg.ConfigError as e:
-            hint = " (try: sudo cmctl ...)" if os.geteuid() != 0 else ""
-            print(f"Error: {e}{hint}")
-            sys.exit(1)
+            _exit_unreadable(e)
 
     def effective_config(self) -> dict:
         """Load the configuration as the daemon applies it, reporting invalid entries"""
         uid_min, _ = cfg.read_uid_range()
-        return cfg.validate(self.load_config(), lambda m: print(f"Warning: {m}"), uid_min)
+        return cfg.validate(self.load_config(), _print_warning, uid_min)
 
     @staticmethod
     def _check_minutes(minutes: int) -> bool:
@@ -517,16 +525,13 @@ class ChildMinderManager:
     def _load_user_control(self) -> dict:
         """Load account disables and schedules, exiting if the file is unusable"""
         try:
-            return self.user_control.load(lambda m: print(f"Warning: {m}"))
+            return self.user_control.load(_print_warning)
         except store.StoreError as e:
-            hint = " (try: sudo cmctl ...)" if os.geteuid() != 0 else ""
-            print(f"Error: {e}{hint}")
-            sys.exit(1)
+            _exit_unreadable(e)
 
     def _save_user_control(self, user_control: dict):
         """Save account disables and schedules; the caller holds the lock"""
-        self.user_control.path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(self.user_control.path, user_control)
+        self.user_control.save(user_control)
         self._enable_user_control()
 
     def _enable_user_control(self):
@@ -542,13 +547,17 @@ class ChildMinderManager:
 
     @contextmanager
     def _edit_user_control(self):
-        """Yield account disables and schedules under the lock, saving any change"""
-        with self.user_control.locked():
-            user_control = self._load_user_control()
-            before = copy.deepcopy(user_control)
-            yield user_control
-            if user_control != before:
-                self._save_user_control(user_control)
+        """Yield account disables and schedules under the lock, saving any change.
+
+        Only loading the file raises StoreError, so the body is not affected
+        by the handler.
+        """
+        try:
+            with self.user_control.update(_print_warning,
+                                          on_save=self._enable_user_control) as user_control:
+                yield user_control
+        except store.StoreError as e:
+            _exit_unreadable(e)
 
     def _user_schedule(self, user_control: dict, username: str) -> dict:
         """Return username's schedule in the current format, empty if there is none"""

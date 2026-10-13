@@ -96,6 +96,15 @@ class UserControlStoreTest(StoreTestCase):
             data["disabled_users"]["kid"] = {}
         self.assertEqual(self.store.load()["disabled_users"], {"kid": {}})
 
+    def test_on_save_runs_only_after_a_save(self):
+        saves = []
+        with self.store.update(on_save=lambda: saves.append(self.store.path.exists())):
+            pass
+        self.assertEqual(saves, [])
+        with self.store.update(on_save=lambda: saves.append(self.store.path.exists())) as data:
+            data["disabled_users"]["kid"] = {}
+        self.assertEqual(saves, [True])
+
     def test_update_saves_nothing_when_the_body_raises(self):
         with self.assertRaises(RuntimeError):
             with self.store.update() as data:
