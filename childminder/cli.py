@@ -628,7 +628,9 @@ class ChildMinderManager:
             if sched[day]:
                 print(f"Remaining {day} windows: {schedule.format_windows(sched[day])}")
             else:
-                print(f"No {day} windows remaining - {day} access is now unrestricted")
+                print(f"No {day} windows remaining - {username} now has no {day} access")
+                print(f"Allow it again with: cmctl set-{day}-hours {username} START END, "
+                      f"or cmctl clear-{day}-windows {username} for unrestricted access")
 
     def clear_windows(self, username: str, day: str):
         """Make a day type unrestricted"""

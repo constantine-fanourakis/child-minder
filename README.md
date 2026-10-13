@@ -303,7 +303,9 @@ sudo cmctl clear-user-hours johnny        # unrestricted at any time
 ```
 
 `remove-weekday-window` and `remove-weekend-window` drop one window at a time
-and need its exact hours; the clear commands remove all of them at once.
+and need its exact hours; removing the last window of a day type denies that
+day type. The clear commands remove all windows at once and leave the day type
+unrestricted.
 
 ### Denying a day type
 

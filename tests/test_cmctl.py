@@ -318,6 +318,14 @@ class ScheduleCommandTest(CmctlTestCase):
         self.run_cmctl("remove-weekday-window", "kid", "7", "8")
         self.assertEqual(self.schedule()["weekday"], [{"start_hour": 15, "end_hour": 20}])
 
+    def test_removing_last_window_denies_the_day_type(self):
+        self.run_cmctl("set-weekday-hours", "kid", "15", "17")
+        out = self.run_cmctl("remove-weekday-window", "kid", "15", "17")
+        self.assertIn("no weekday access", out)
+        sched = self.schedule()
+        self.assertEqual(sched["weekday"], [])
+        self.assertEqual(sched["no_access"], ["weekday"])
+
     def test_clearing_one_day_type_keeps_the_other(self):
         self.run_cmctl("set-weekday-hours", "kid", "15", "20")
         self.run_cmctl("set-weekend-hours", "kid", "9", "22")

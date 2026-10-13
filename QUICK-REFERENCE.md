@@ -117,7 +117,7 @@ sudo cmctl add-weekday-window johnny 7 8     # Add 7-8 AM weekday window
 sudo cmctl add-weekend-window johnny 12 14   # Add 12-2 PM weekend window
 
 # Remove specific windows; removing the last one for a day type
-# returns that day to unrestricted access
+# denies that day type
 sudo cmctl remove-weekday-window johnny 7 8
 sudo cmctl remove-weekend-window johnny 12 14
 

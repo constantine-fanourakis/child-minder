@@ -36,7 +36,15 @@ class NormalizeTest(unittest.TestCase):
                "weekend": "all day", "no_access": ["sunday", "weekend"]}
         self.assertEqual(schedule.normalize(raw, warnings.append), {
             "weekday": [AFTERNOON], "weekend": [], "no_access": ["weekend"]})
-        self.assertEqual(len(warnings), 1)
+        self.assertEqual(len(warnings), 2)
+
+    def test_day_type_with_only_malformed_windows_is_denied(self):
+        warnings = []
+        raw = {"weekday": [{"start_hour": "8", "end_hour": 9}], "weekend": "all day"}
+        self.assertEqual(schedule.normalize(raw, warnings.append), {
+            "weekday": [], "weekend": [], "no_access": ["weekday", "weekend"]})
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("denying", warnings[0])
 
     def test_anything_else_is_an_empty_schedule(self):
         for raw in (None, [], "x", {}):
@@ -76,6 +84,12 @@ class EditTest(unittest.TestCase):
         schedule.allow(sched, "weekday")
         schedule.allow(sched, "weekend")
         self.assertNotIn("no_access", sched)
+
+    def test_removing_the_last_window_denies_the_day_type(self):
+        sched = {"weekday": [AFTERNOON], "weekend": []}
+        self.assertTrue(schedule.remove_window(sched, "weekday", AFTERNOON))
+        self.assertTrue(schedule.is_denied(sched, "weekday"))
+        self.assertFalse(schedule.is_allowed(sched, WEEKDAY.replace(hour=16)))
 
     def test_setting_a_window_lifts_a_deny(self):
         sched = schedule.empty()

@@ -49,7 +49,9 @@ def normalize(raw, warn: Optional[Warn] = None) -> dict:
     """Return a schedule in the current format from any format cmctl has written.
 
     Malformed windows and unknown no_access entries are dropped, with a
-    warning when warn is given.
+    warning when warn is given. A day type whose entry holds windows but
+    none that can be read is denied rather than left unrestricted, so a
+    damaged schedule never opens access.
     """
     if not isinstance(raw, dict):
         raw = {}
@@ -63,21 +65,28 @@ def normalize(raw, warn: Optional[Warn] = None) -> dict:
         window = {"start_hour": raw.get("start_hour"), "end_hour": raw.get("end_hour")}
         days = {"weekday": [window], "weekend": [dict(window)]}
     else:
-        days = {day: raw.get(day) if isinstance(raw.get(day), list) else []
+        # A present entry that is not a list stands for one unreadable window
+        days = {day: raw.get(day) if isinstance(raw.get(day), list)
+                else [] if raw.get(day) is None else [raw.get(day)]
                 for day in DAY_TYPES}
 
     schedule = {}
+    unreadable = []
     for day in DAY_TYPES:
         windows = [{"start_hour": w["start_hour"], "end_hour": w["end_hour"]}
                    for w in days[day] if _is_window(w)]
-        if len(windows) != len(days[day]) and warn:
-            warn(f"Ignoring malformed {day} windows")
+        if len(windows) != len(days[day]):
+            if not windows:
+                unreadable.append(day)
+            if warn:
+                warn(f"Ignoring malformed {day} windows"
+                     + ("; denying that day type" if not windows else ""))
         schedule[day] = windows
 
     denied = raw.get("no_access", [])
     if not isinstance(denied, list):
         denied = []
-    denied = [day for day in DAY_TYPES if day in denied]
+    denied = [day for day in DAY_TYPES if day in denied or day in unreadable]
     if denied:
         schedule["no_access"] = denied
     return schedule
@@ -141,10 +150,16 @@ def add_window(schedule: dict, day: str, window: dict) -> bool:
 
 
 def remove_window(schedule: dict, day: str, window: dict) -> bool:
-    """Remove a window from a day type; False if it was not there"""
+    """Remove a window from a day type; False if it was not there.
+
+    Removing the last window denies the day type: taking time away must
+    never leave the day with no restriction at all.
+    """
     if window not in schedule[day]:
         return False
     schedule[day].remove(window)
+    if not schedule[day]:
+        deny(schedule, day)
     return True
 
 
