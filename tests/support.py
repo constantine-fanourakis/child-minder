@@ -98,13 +98,15 @@ class CmctlTestCase(unittest.TestCase):
         self.state_path = self.tmp / "state.json"
         self.log_path = self.tmp / "minder.log"
         self.user_control_path = self.tmp / "user_control.json"
+        self.web_config_path = self.tmp / "web.json"
         with open(self.config_path, 'w') as f:
             json.dump({"enabled": True}, f)
 
         for name, path in (('CONFIG_PATH', self.config_path),
                            ('STATE_PATH', self.state_path),
                            ('LOG_PATH', self.log_path),
-                           ('USER_CONTROL_PATH', self.user_control_path)):
+                           ('USER_CONTROL_PATH', self.user_control_path),
+                           ('WEB_CONFIG_PATH', self.web_config_path)):
             patcher = mock.patch.object(cmctl, name, str(path))
             patcher.start()
             self.addCleanup(patcher.stop)

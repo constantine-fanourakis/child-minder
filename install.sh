@@ -100,7 +100,7 @@ mkdir -p /var/log/child-minder
 REQUIRED_FILES=("child-minder.py" "cmctl.py"
     "childminder/__init__.py" "childminder/accounts.py" "childminder/cli.py"
     "childminder/config.py" "childminder/daemon.py" "childminder/policy.py"
-    "childminder/schedule.py" "childminder/store.py"
+    "childminder/schedule.py" "childminder/store.py" "childminder/webauth.py"
     "config.json" "child-minder.service" "cmctl-completion.bash")
 for file in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$file" ]; then

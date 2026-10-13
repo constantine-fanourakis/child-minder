@@ -267,6 +267,7 @@ Overnight schedules are supported — use a start hour greater than the end hour
 cmctl enable                # Enable monitoring
 cmctl disable               # Disable monitoring (temporary)
 cmctl reset                 # Reset daily usage counters (signals the running service)
+cmctl web-password          # Set the web UI password (prompts, or reads one line from stdin)
 ```
 
 ## Access Schedules
@@ -393,6 +394,7 @@ sudo tail -f /var/log/child-minder/minder.log   # Application log
 | `/etc/child-minder/config.json` | Configuration |
 | `/var/lib/child-minder/state.json` | Usage/state data |
 | `/var/lib/child-minder/user_control.json` | User control state |
+| `/etc/child-minder/web.json` | Web UI settings and password hash |
 | `/var/log/child-minder/minder.log` | Application log |
 | `/usr/lib/child-minder/child-minder.py` | Main daemon |
 | `/usr/lib/child-minder/cmctl.py` | Management utility |

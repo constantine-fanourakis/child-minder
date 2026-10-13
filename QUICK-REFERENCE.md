@@ -143,6 +143,7 @@ other open until it is set too.
 sudo cmctl enable     # Enable monitoring
 sudo cmctl disable    # Disable monitoring (temporary)
 sudo cmctl reset      # Reset daily usage counters
+sudo cmctl web-password   # Set the web UI password
 ```
 
 ## Common Scenarios

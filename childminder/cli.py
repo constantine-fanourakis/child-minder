@@ -5,6 +5,7 @@ Provides easy management and reporting for the Child Minder system
 
 import sys
 import argparse
+import getpass
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -18,12 +19,14 @@ from childminder import config as cfg
 from childminder import policy
 from childminder import schedule
 from childminder import store
+from childminder import webauth
 from childminder.store import atomic_write_json
 
 CONFIG_PATH = "/etc/child-minder/config.json"
 STATE_PATH = "/var/lib/child-minder/state.json"
 LOG_PATH = "/var/log/child-minder/minder.log"
 USER_CONTROL_PATH = "/var/lib/child-minder/user_control.json"
+WEB_CONFIG_PATH = "/etc/child-minder/web.json"
 
 SERVICE = "child-minder"
 
@@ -62,6 +65,7 @@ class ChildMinderManager:
         self.state_path = Path(STATE_PATH)
         self.log_path = Path(LOG_PATH)
         self.user_control = store.UserControlStore(Path(USER_CONTROL_PATH))
+        self.web_config_path = Path(WEB_CONFIG_PATH)
         
     def load_config(self) -> dict:
         """Load the configuration file as written, for editing"""
@@ -570,6 +574,32 @@ class ChildMinderManager:
             print(f"Error enabling user: {e}")
             return False
     
+    def set_web_password(self):
+        """Set the web UI password, read from the terminal or from one line of stdin"""
+        if sys.stdin.isatty():
+            password = getpass.getpass("New web UI password: ")
+            if getpass.getpass("Repeat password: ") != password:
+                print("Error: Passwords do not match")
+                return False
+        else:
+            password = sys.stdin.readline().rstrip("\n")
+        if not password:
+            print("Error: Password must not be empty")
+            return False
+
+        try:
+            web_config = store.read_json(self.web_config_path) or {}
+        except store.StoreError as e:
+            _exit_unreadable(e)
+        web_config["password"] = webauth.hash_password(password)
+        try:
+            atomic_write_json(self.web_config_path, web_config)
+        except OSError as e:
+            print(f"Error saving {self.web_config_path}: {e}")
+            return False
+        print("Web UI password set")
+        return True
+
     def _window(self, start_hour: int, end_hour: int) -> Optional[dict]:
         """Return the window for an hour range, or None after reporting why it is invalid"""
         error = schedule.hours_error(start_hour, end_hour)
@@ -962,6 +992,10 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
 
     user_status_parser = subparsers.add_parser('user-status', help='Show user account status')
     user_status_parser.add_argument('username', nargs='?', help='Username (show all if not specified)')
+
+    subparsers.add_parser('web-password', help='Set the web UI password',
+        description='Set the password for the web UI. It is prompted for on a terminal, '
+                    'otherwise read as one line from standard input.')
     
     args = parser.parse_args()
     
@@ -1041,6 +1075,8 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
         succeeded = manager.clear_user_hours(args.username)
     elif args.command == 'user-status':
         succeeded = manager.show_user_status(args.username)
+    elif args.command == 'web-password':
+        succeeded = manager.set_web_password()
 
     if not succeeded:
         sys.exit(1)

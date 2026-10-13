@@ -14,7 +14,7 @@ reset logs enable disable disable-user enable-user set-weekday-hours \
 set-weekend-hours set-user-hours add-weekday-window add-weekend-window \
 remove-weekday-window remove-weekend-window clear-weekday-windows \
 clear-weekend-windows clear-user-hours deny-weekday-access \
-deny-weekend-access user-status"
+deny-weekend-access user-status web-password"
 
     # Commands that take a username as their first argument
     local user_commands="add-user remove-user disable-user enable-user \

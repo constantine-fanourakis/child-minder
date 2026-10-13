@@ -1,11 +1,13 @@
 """Tests for the cmctl command-line interface, run through its main()"""
 
 import fcntl
+import io
 import json
 import os
 import unittest
 from unittest import mock
 
+from childminder import webauth
 from tests.support import CmctlTestCase, cmctl, current_username
 
 
@@ -356,6 +358,45 @@ class AccountCommandTest(CmctlTestCase):
         out = self.run_cmctl("disable-user", "no-such-user-cmtest")
         self.assertIn("does not exist", out)
         self.assertFalse(self.user_control_path.exists())
+
+
+class WebPasswordTest(CmctlTestCase):
+    def set_password(self, line: str) -> str:
+        with mock.patch('sys.stdin', io.StringIO(line)):
+            return self.run_cmctl("web-password")
+
+    def test_password_from_stdin_is_stored_hashed(self):
+        out = self.set_password("secret\n")
+        self.assertIn("password set", out)
+        self.assertEqual(self.exit_status, 0)
+        stored = self.read_json(self.web_config_path)["password"]
+        self.assertNotIn("secret", json.dumps(stored))
+        self.assertTrue(webauth.verify_password("secret", stored))
+        self.assertEqual(os.stat(self.web_config_path).st_mode & 0o777, 0o600)
+
+    def test_other_settings_are_kept(self):
+        self.web_config_path.write_text('{"port": 9000}')
+        self.set_password("secret\n")
+        self.assertEqual(self.read_json(self.web_config_path)["port"], 9000)
+
+    def test_empty_password_is_refused(self):
+        out = self.set_password("\n")
+        self.assertIn("must not be empty", out)
+        self.assertEqual(self.exit_status, 1)
+        self.assertFalse(self.web_config_path.exists())
+
+    def test_terminal_entry_must_match(self):
+        with mock.patch('sys.stdin', mock.Mock(isatty=lambda: True)), \
+                mock.patch.object(cmctl.getpass, 'getpass', side_effect=["one", "two"]):
+            out = self.run_cmctl("web-password")
+        self.assertIn("do not match", out)
+        self.assertFalse(self.web_config_path.exists())
+
+    def test_requires_root(self):
+        self.euid = 1000
+        out = self.set_password("secret\n")
+        self.assertIn("must be run as root", out)
+        self.assertFalse(self.web_config_path.exists())
 
 
 class ScheduleCommandTest(CmctlTestCase):
