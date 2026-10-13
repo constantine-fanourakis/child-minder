@@ -548,7 +548,7 @@ class ChildMinderManager:
         if self._regular_account_uid(username) is None:
             return False
         try:
-            with self._edit_user_control() as user_control:
+            with self._edit_user_control(restricts=False) as user_control:
                 if username not in user_control["disabled_users"]:
                     print(f"Error: {username} is not disabled by Child Minder")
                     return False
@@ -641,15 +641,20 @@ class ChildMinderManager:
         self.save_config(config)
 
     @contextmanager
-    def _edit_user_control(self):
+    def _edit_user_control(self, restricts: bool):
         """Yield account disables and schedules under the lock, saving any change.
+
+        restricts says whether the edit can add a restriction. Only such an
+        edit turns user control on: the daemon needs it to enforce the file,
+        and an edit that only lifts restrictions must not resume enforcing
+        schedules an administrator switched off.
 
         Only loading the file raises StoreError, so the body is not affected
         by the handler.
         """
+        on_save = self._enable_user_control if restricts else None
         try:
-            with self.user_control.update(_print_warning,
-                                          on_save=self._enable_user_control) as user_control:
+            with self.user_control.update(_print_warning, on_save=on_save) as user_control:
                 yield user_control
         except store.StoreError as e:
             _exit_unreadable(e)
@@ -678,7 +683,7 @@ class ChildMinderManager:
         window = self._window(start_hour, end_hour)
         if window is None:
             return False
-        with self._edit_user_control() as user_control:
+        with self._edit_user_control(restricts=True) as user_control:
             sched = self._user_schedule(user_control, username)
             schedule.set_window(sched, day, window)
             fill_weekend = fill_empty_weekend and schedule.is_unrestricted(sched, "weekend")
@@ -704,7 +709,7 @@ class ChildMinderManager:
         window = self._window(start_hour, end_hour)
         if window is None:
             return False
-        with self._edit_user_control() as user_control:
+        with self._edit_user_control(restricts=True) as user_control:
             sched = self._user_schedule(user_control, username)
             if not schedule.add_window(sched, day, window):
                 print(f"Window {schedule.format_hour_range(start_hour, end_hour)} "
@@ -718,7 +723,7 @@ class ChildMinderManager:
 
     def remove_window(self, username: str, day: str, start_hour: int, end_hour: int):
         """Remove an access window from a day type"""
-        with self._edit_user_control() as user_control:
+        with self._edit_user_control(restricts=True) as user_control:
             if username not in user_control["daily_schedules"]:
                 print(f"No schedule found for user {username}")
                 return False
@@ -741,7 +746,7 @@ class ChildMinderManager:
 
     def clear_windows(self, username: str, day: str):
         """Make a day type unrestricted"""
-        with self._edit_user_control() as user_control:
+        with self._edit_user_control(restricts=False) as user_control:
             sched = self._user_schedule(user_control, username)
             label = day.capitalize()
             if schedule.is_unrestricted(sched, day):
@@ -760,7 +765,7 @@ class ChildMinderManager:
 
     def deny_access(self, username: str, day: str):
         """Deny all access on a day type, replacing any windows it had"""
-        with self._edit_user_control() as user_control:
+        with self._edit_user_control(restricts=True) as user_control:
             sched = self._user_schedule(user_control, username)
             if schedule.is_denied(sched, day):
                 print(f"{username} already has no {day} access")
@@ -775,7 +780,7 @@ class ChildMinderManager:
 
     def clear_user_hours(self, username: str):
         """Remove a user's access schedule entirely, allowing access at any time"""
-        with self._edit_user_control() as user_control:
+        with self._edit_user_control(restricts=False) as user_control:
             if username not in user_control["daily_schedules"]:
                 print(f"Access hours for {username} are already unrestricted")
                 return True

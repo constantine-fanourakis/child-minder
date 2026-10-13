@@ -419,6 +419,34 @@ class WebPasswordTest(CmctlTestCase):
         self.assertFalse(self.web_config_path.exists())
 
 
+
+class UserControlSwitchTest(CmctlTestCase):
+    """Edits that can add a restriction turn user control on; others leave it off"""
+
+    def setUp(self):
+        super().setUp()
+        self.user_control_path.write_text(json.dumps({
+            "disabled_users": {current_username(): {"reason": "x"}},
+            "daily_schedules": {"kid": {"weekday": [{"start_hour": 15, "end_hour": 20}],
+                                        "weekend": []}}}))
+
+    def user_control_enabled(self, *argv) -> bool:
+        self.write_config({"user_control": {"enabled": False}})
+        self.run_cmctl(*argv)
+        self.assertEqual(self.exit_status, 0, argv)
+        return self.read_json(self.config_path)["user_control"]["enabled"]
+
+    def test_lifting_restrictions_leaves_user_control_off(self):
+        for argv in (("enable-user", current_username()), ("clear-weekday-windows", "kid"),
+                     ("clear-user-hours", "kid")):
+            self.assertFalse(self.user_control_enabled(*argv), argv)
+
+    def test_adding_restrictions_turns_user_control_on(self):
+        for argv in (("set-weekend-hours", "kid", "9", "17"), ("deny-weekend-access", "kid"),
+                     ("add-weekday-window", "kid", "6", "7"),
+                     ("remove-weekday-window", "kid", "15", "20")):
+            self.assertTrue(self.user_control_enabled(*argv), argv)
+
 class ScheduleCommandTest(CmctlTestCase):
     def schedule(self, user="kid"):
         return self.read_json(self.user_control_path)["daily_schedules"].get(user)
