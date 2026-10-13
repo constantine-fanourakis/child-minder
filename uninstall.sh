@@ -58,8 +58,10 @@ fi
 
 echo "Starting uninstallation..."
 
-# Stop and disable service
-echo "Stopping service..."
+# Stop and disable services
+echo "Stopping services..."
+systemctl stop child-minder-web child-minder-broker.socket 2>/dev/null || true
+systemctl disable child-minder-web child-minder-broker.socket 2>/dev/null || true
 systemctl stop child-minder 2>/dev/null || true
 systemctl disable child-minder 2>/dev/null || true
 
@@ -95,9 +97,12 @@ sys.exit(1 if failures else 0)
 "
 fi
 
-# Remove service file
-echo "Removing service file..."
+# Remove unit files
+echo "Removing unit files..."
 rm -f /etc/systemd/system/child-minder.service
+rm -f /etc/systemd/system/child-minder-web.service
+rm -f /etc/systemd/system/child-minder-broker.socket
+rm -f "/etc/systemd/system/child-minder-broker@.service"
 systemctl daemon-reload
 
 # Remove executable files
@@ -121,11 +126,23 @@ if [[ "$remove_data" =~ ^[Yy]$ ]]; then
     rm -rf /var/lib/child-minder
     rm -rf /var/log/child-minder
 else
+    # web.json belongs to the web UI's group, which is removed below
+    if [ -f /etc/child-minder/web.json ]; then
+        chgrp root /etc/child-minder/web.json
+    fi
     echo "Keeping configuration and data files."
     echo "Files remain at:"
     [ -d /etc/child-minder ] && echo "  - /etc/child-minder"
     [ -d /var/lib/child-minder ] && echo "  - /var/lib/child-minder"
     [ -d /var/log/child-minder ] && echo "  - /var/log/child-minder"
+fi
+
+if getent passwd child-minder-web >/dev/null; then
+    echo "Removing the web UI system user..."
+    userdel child-minder-web
+fi
+if getent group child-minder-web >/dev/null; then
+    groupdel child-minder-web
 fi
 
 echo ""

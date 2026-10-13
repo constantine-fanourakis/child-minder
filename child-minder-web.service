@@ -1,0 +1,36 @@
+[Unit]
+Description=Child Minder - web UI
+After=network.target child-minder-broker.socket
+Requires=child-minder-broker.socket
+
+[Service]
+# Everything that needs root goes through the broker socket, so this
+# process runs unprivileged and is given no capabilities.
+User=child-minder-web
+Group=child-minder-web
+ExecStart=/usr/bin/python3 /usr/lib/child-minder/child-minder-web.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

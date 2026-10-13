@@ -121,6 +121,13 @@ else
     FAILED=$((FAILED + 1))
 fi
 
+# Test 12: Check the web UI and the broker socket it depends on
+if test_feature "web UI is running" 'systemctl is-active --quiet child-minder-web && systemctl is-active --quiet child-minder-broker.socket'; then
+    PASSED=$((PASSED + 1))
+else
+    FAILED=$((FAILED + 1))
+fi
+
 echo ""
 echo "================================="
 echo -e "Test Results: ${GREEN}$PASSED passed${NC}, ${RED}$FAILED failed${NC}"

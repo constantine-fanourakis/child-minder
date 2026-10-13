@@ -12,6 +12,8 @@ A parental control system for Linux that monitors and controls application usage
 - Disable/enable user accounts with optional timed re-enable
 - Desktop notifications warning users before limits expire
 - Usage tracking and logging
+- Web UI for phones and computers on the home network: usage, settings,
+  account locks and screenshots
 - Runs as a systemd service with automatic startup
 - SIGHUP config reload (no restart required)
 
@@ -387,6 +389,84 @@ sudo journalctl -u child-minder --since today   # Today's logs
 sudo tail -f /var/log/child-minder/minder.log   # Application log
 ```
 
+## Web UI
+
+The installer starts a web UI on port 8765. Set its password before using it:
+
+```bash
+sudo cmctl web-password
+```
+
+Then open `http://<computer's address>:8765/` from a phone or computer on the
+same network. If the firewall blocks the port (openSUSE uses firewalld):
+
+```bash
+sudo firewall-cmd --permanent --add-port=8765/tcp && sudo firewall-cmd --reload
+```
+
+The **Today** tab shows each user's screen time against their limits, their
+access hours, and whether they are locked. From there you can lock a user for
+a time or until unlocked, unlock them, take a screenshot of their X11 screen,
+reset today's usage, and turn monitoring on or off. The **Settings** tab edits
+monitored users, daily limits, access hours, blocked applications,
+application limits and groups. **Logs** shows the end of the daemon's log.
+
+Usage figures come from the state the daemon saves once a minute.
+
+### How it is built
+
+Two parts, so that nothing that faces the network runs as root:
+
+- `child-minder-web.service` serves the page and handles login. It runs as
+  the system user `child-minder-web`, with no capabilities and a read-only
+  view of the system.
+- `child-minder-broker.socket` starts `child-minder-broker@.service` as root
+  for each request from the web UI. The socket at
+  `/run/child-minder-broker.sock` accepts only root and the
+  `child-minder-web` group. The broker answers a fixed set of requests:
+  reading usage, the configuration and the log, running cmctl subcommands
+  from a fixed list, and taking a screenshot.
+
+Every change made in the web UI is a cmctl command, so it behaves exactly as
+the same command typed in a terminal. Each one is logged in the journal with
+the address of the device that sent it:
+
+```bash
+sudo journalctl -u 'child-minder-broker@*' --since today
+```
+
+Locking, unlocking and screenshots work only for monitored users. When
+`monitored_users` is empty, that means every regular user.
+
+### Security
+
+- The page is served over plain HTTP. Anyone on the network who can capture
+  its traffic can read the password, the session cookie and screenshots.
+- Five failed logins from one address lock that address out for five minutes.
+- Sessions last 12 hours. Restarting `child-minder-web`, or setting a new
+  password, logs every session out.
+- The session cookie is `HttpOnly` and `SameSite=Strict`, and every change
+  also needs a per-session token, so another web site cannot act through a
+  logged-in browser.
+
+### Settings
+
+`/etc/child-minder/web.json` holds the password hash and two optional
+settings:
+
+```json
+{"port": 8765, "bind": "0.0.0.0"}
+```
+
+Set `"bind": "127.0.0.1"` to reach the UI only from this computer, for
+example through an SSH tunnel. Restart `child-minder-web` after changing
+either setting.
+
+### Screenshots
+
+Screenshots need an X11 session and either ImageMagick (`import`) or
+`ffmpeg`. They do not work in Wayland sessions.
+
 ## File Locations
 
 | Path | Description |
@@ -398,9 +478,13 @@ sudo tail -f /var/log/child-minder/minder.log   # Application log
 | `/var/log/child-minder/minder.log` | Application log |
 | `/usr/lib/child-minder/child-minder.py` | Main daemon |
 | `/usr/lib/child-minder/cmctl.py` | Management utility |
-| `/usr/lib/child-minder/childminder/` | Python package shared by both |
+| `/usr/lib/child-minder/child-minder-web.py` | Web UI |
+| `/usr/lib/child-minder/child-minder-broker.py` | Web UI broker, run as root per request |
+| `/usr/lib/child-minder/childminder/` | Python package shared by all of them |
 | `/usr/bin/cmctl`, `/usr/bin/cmctl.py` | Symlinks to the management utility |
 | `/etc/systemd/system/child-minder.service` | Systemd unit |
+| `/etc/systemd/system/child-minder-web.service` | Web UI unit |
+| `/etc/systemd/system/child-minder-broker.socket`, `child-minder-broker@.service` | Web UI broker units |
 
 ## Troubleshooting
 

@@ -30,6 +30,17 @@ sudo journalctl -u child-minder -f        # Live logs
 sudo tail -f /var/log/child-minder/minder.log  # File logs
 ```
 
+## Web UI
+
+```bash
+sudo cmctl web-password                     # Set the password first
+# Then browse to http://<computer's address>:8765/
+sudo systemctl status child-minder-web      # Web UI status
+sudo journalctl -u 'child-minder-broker@*'  # Changes made from the web UI
+# openSUSE firewall:
+sudo firewall-cmd --permanent --add-port=8765/tcp && sudo firewall-cmd --reload
+```
+
 ## Configuration Management (`cmctl`)
 
 ### View Current Setup
@@ -312,7 +323,10 @@ and every process matching one pattern shares a single time counter.
 - **User Control**: `/var/lib/child-minder/user_control.json`
 - **Logs**: `/var/log/child-minder/minder.log` (rotates at 5 MB, 5 kept)
 - **Last good config**: `/var/lib/child-minder/config.last-good.json`
+- **Web UI settings and password hash**: `/etc/child-minder/web.json`
 - **Service**: `/etc/systemd/system/child-minder.service`
+- **Web UI units**: `child-minder-web.service`, `child-minder-broker.socket`,
+  `child-minder-broker@.service` in `/etc/systemd/system/`
 - **Program**: `/usr/lib/child-minder/` (`cmctl` is linked from `/usr/bin`)
 
 ## Safety Commands

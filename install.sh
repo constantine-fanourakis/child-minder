@@ -97,11 +97,14 @@ mkdir -p /var/lib/child-minder
 mkdir -p /var/log/child-minder
 
 # Check if all required files exist
-REQUIRED_FILES=("child-minder.py" "cmctl.py"
-    "childminder/__init__.py" "childminder/accounts.py" "childminder/cli.py"
-    "childminder/config.py" "childminder/daemon.py" "childminder/policy.py"
-    "childminder/schedule.py" "childminder/store.py" "childminder/webauth.py"
-    "config.json" "child-minder.service" "cmctl-completion.bash")
+REQUIRED_FILES=("child-minder.py" "cmctl.py" "child-minder-web.py" "child-minder-broker.py"
+    "childminder/__init__.py" "childminder/accounts.py" "childminder/broker.py"
+    "childminder/cli.py" "childminder/config.py" "childminder/daemon.py"
+    "childminder/policy.py" "childminder/schedule.py" "childminder/store.py"
+    "childminder/web.py" "childminder/webauth.py"
+    "childminder/static/index.html" "childminder/static/app.js" "childminder/static/style.css"
+    "config.json" "child-minder.service" "child-minder-web.service"
+    "child-minder-broker.socket" "child-minder-broker@.service" "cmctl-completion.bash")
 for file in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$file" ]; then
         echo "Error: Required file '$file' not found in current directory"
@@ -123,8 +126,10 @@ echo "Copying files..."
 LIB_DIR=/usr/lib/child-minder
 rm -rf "$LIB_DIR"
 mkdir -p "$LIB_DIR/childminder"
-install -m 755 child-minder.py cmctl.py "$LIB_DIR/"
+install -m 755 child-minder.py cmctl.py child-minder-web.py child-minder-broker.py "$LIB_DIR/"
 install -m 644 childminder/*.py "$LIB_DIR/childminder/"
+install -d -m 755 "$LIB_DIR/childminder/static"
+install -m 644 childminder/static/* "$LIB_DIR/childminder/static/"
 # The service cannot write bytecode under its read-only /usr, so it is built here
 "$PYTHON" -m compileall -q "$LIB_DIR"
 
@@ -179,15 +184,29 @@ if exact:
 EOF
 fi
 
+# The web UI front end runs as this unprivileged system user. Its group may
+# connect to the broker socket and read web.json, nothing else of ours.
+WEB_USER=child-minder-web
+if ! getent passwd "$WEB_USER" >/dev/null; then
+    echo "Creating system user $WEB_USER for the web UI..."
+    useradd --system --user-group --no-create-home --home-dir / \
+        --shell /usr/sbin/nologin "$WEB_USER"
+fi
+if [ -f /etc/child-minder/web.json ]; then
+    chgrp "$WEB_USER" /etc/child-minder/web.json
+    chmod 640 /etc/child-minder/web.json
+fi
+
 # Usage data records what the monitored user has been running, so neither
 # directory is readable by anyone but root.
 chmod 700 /var/lib/child-minder
 chmod 700 /var/log/child-minder
 chmod 600 /var/lib/child-minder/* 2>/dev/null || true
 
-# Install systemd service
-echo "Installing systemd service..."
-cp child-minder.service /etc/systemd/system/
+# Install systemd units
+echo "Installing systemd units..."
+cp child-minder.service child-minder-web.service child-minder-broker.socket \
+    child-minder-broker@.service /etc/systemd/system/
 
 # Reload systemd
 systemctl daemon-reload
@@ -201,6 +220,30 @@ systemctl enable child-minder.service
 # it is configured.
 echo "Starting child-minder service..."
 systemctl restart child-minder
+
+echo "Starting the web UI..."
+systemctl enable child-minder-broker.socket child-minder-web.service
+systemctl restart child-minder-broker.socket
+systemctl restart child-minder-web.service
+
+WEB_PORT=$("$PYTHON" - <<'EOF' 2>/dev/null || echo 8765
+import json
+try:
+    port = json.load(open("/etc/child-minder/web.json")).get("port", 8765)
+except (OSError, ValueError):
+    port = 8765
+print(port if isinstance(port, int) and not isinstance(port, bool) else 8765)
+EOF
+)
+echo ""
+echo "Web UI: http://<this computer's address>:${WEB_PORT}/"
+if ! "$PYTHON" -c 'import json, sys; sys.exit("password" not in json.load(open("/etc/child-minder/web.json")))' 2>/dev/null; then
+    echo "  Set its password first: sudo cmctl web-password"
+fi
+if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    echo "  To reach it from other devices, open the port in firewalld:"
+    echo "    sudo firewall-cmd --permanent --add-port=${WEB_PORT}/tcp && sudo firewall-cmd --reload"
+fi
 
 if $IS_UPDATE; then
     echo ""

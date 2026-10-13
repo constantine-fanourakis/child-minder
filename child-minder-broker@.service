@@ -1,0 +1,12 @@
+[Unit]
+Description=Child Minder - web UI broker request
+
+[Service]
+# Runs as root without ProtectSystem or PrivateTmp: it runs cmctl, which
+# writes /etc/child-minder and runs usermod, passwd and loginctl, and it
+# captures X11 displays through the sockets in /tmp/.X11-unix.
+User=root
+ExecStart=/usr/bin/python3 /usr/lib/child-minder/child-minder-broker.py
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal

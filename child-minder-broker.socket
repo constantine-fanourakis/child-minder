@@ -1,0 +1,15 @@
+[Unit]
+Description=Child Minder - web UI broker socket
+
+[Socket]
+# Only root and the web front end's group may connect
+ListenStream=/run/child-minder-broker.sock
+SocketUser=root
+SocketGroup=child-minder-web
+SocketMode=0660
+# One broker process per connection, with the connection as stdin/stdout
+Accept=yes
+MaxConnections=16
+
+[Install]
+WantedBy=sockets.target
