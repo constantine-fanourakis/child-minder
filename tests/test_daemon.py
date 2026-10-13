@@ -414,6 +414,17 @@ class TerminalMessageTest(MinderTestCase):
             self.assertTrue(minder.write_to_user_terminals("kid", "hello"))
         self.assertEqual(tty.read_text().count("hello"), 1)
 
+    def test_terminal_never_becomes_the_daemons(self):
+        tty = self.tmp / "tty"
+        tty.write_text("")
+        procs = [mock.Mock(info={'username': "kid", 'terminal': str(tty)})]
+        minder = self.make_minder()
+        real_open = os.open
+        with mock.patch.object(child_minder.psutil, 'process_iter', return_value=procs), \
+                mock.patch.object(child_minder.os, 'open', side_effect=real_open) as opened:
+            minder.write_to_user_terminals("kid", "hello")
+        self.assertTrue(opened.call_args.args[1] & os.O_NOCTTY)
+
     def test_unread_terminal_does_not_block(self):
         # A FIFO with no reader: a blocking open would hang the daemon here
         fifo = self.tmp / "fifo"

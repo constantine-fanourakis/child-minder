@@ -333,7 +333,11 @@ class ChildMinder:
             try:
                 # Non-blocking: a user who leaves a terminal's output queue
                 # full must not be able to stall the root daemon mid-pass.
-                fd = os.open(terminal, os.O_WRONLY | os.O_NONBLOCK)
+                # O_NOCTTY: the daemon leads a session without a terminal, so
+                # opening a terminal that no session owns would otherwise make
+                # it the daemon's, and the user could signal the daemon with
+                # Ctrl+C.
+                fd = os.open(terminal, os.O_WRONLY | os.O_NONBLOCK | os.O_NOCTTY)
                 try:
                     data = f"\n{message}\n\n".encode()
                     while data:
