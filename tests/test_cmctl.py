@@ -70,6 +70,52 @@ class UnreadableDataTest(CmctlTestCase):
         self.assertNotIn("No usage data", out)
 
 
+class ExitStatusTest(CmctlTestCase):
+    """cmctl exits 1 when a command changed nothing because it could not"""
+
+    def assertExits(self, status, *argv):
+        self.run_cmctl(*argv)
+        self.assertEqual(self.exit_status, status, argv)
+
+    def test_successful_commands_exit_zero(self):
+        self.assertExits(0, "block", "steam")
+        self.assertExits(0, "config")
+        self.assertExits(0, "set-weekday-hours", "kid", "15", "20")
+
+    def test_reaching_the_requested_state_already_exits_zero(self):
+        self.run_cmctl("block", "steam")
+        self.assertExits(0, "block", "steam")
+        self.assertExits(0, "clear-weekend-windows", "kid")
+        self.run_cmctl("deny-weekend-access", "kid")
+        self.assertExits(0, "deny-weekend-access", "kid")
+
+    def test_removing_what_is_not_there_exits_one(self):
+        self.assertExits(1, "unblock", "steam")
+        self.assertExits(1, "unlimit", "steam")
+        self.assertExits(1, "remove-from-group", "games", "steam")
+        self.assertExits(1, "group-unlimit", "games")
+        self.assertExits(1, "user-unlimit", "kid")
+        self.assertExits(1, "remove-user", "kid")
+        self.assertExits(1, "remove-weekday-window", "kid", "15", "20")
+
+    def test_invalid_input_exits_one(self):
+        self.assertExits(1, "limit", "steam", "-5")
+        self.assertExits(1, "set-weekday-hours", "kid", "15", "15")
+        self.assertExits(1, "disable-user", current_username(), "-t", "0")
+        self.assertExits(1, "enable-user", current_username())
+        self.assertExits(1, "user-status", "no-such-user-cmtest")
+
+    def test_failed_system_step_exits_one(self):
+        self.fake_run_result = lambda argv: mock.Mock(
+            returncode=1 if argv[0] == 'usermod' else 0, stdout='', stderr='denied')
+        self.assertExits(1, "disable-user", current_username())
+
+    def test_unreadable_file_exits_one(self):
+        self.write_config({})
+        self.config_path.write_text("{broken")
+        self.assertExits(1, "block", "steam")
+
+
 class ConfigCommandTest(CmctlTestCase):
     def test_block_and_unblock(self):
         self.run_cmctl("block", "steam*")

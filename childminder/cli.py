@@ -154,6 +154,7 @@ class ChildMinderManager:
             print(f"Added '{process_name}' to blocked processes")
         else:
             print(f"'{process_name}' is already blocked")
+        return True
 
     def remove_blocked_process(self, process_name: str):
         """Remove a process from the block list"""
@@ -163,8 +164,9 @@ class ChildMinderManager:
             blocked.remove(process_name)
             self.save_config(config)
             print(f"Removed '{process_name}' from blocked processes")
-        else:
-            print(f"'{process_name}' is not in blocked processes")
+            return True
+        print(f"'{process_name}' is not in blocked processes")
+        return False
 
     def add_to_group(self, group_name: str, process_name: str):
         """Add a process to a group"""
@@ -181,6 +183,7 @@ class ChildMinderManager:
             print(f"Added '{process_name}' to group '{group_name}'")
         else:
             print(f"'{process_name}' is already in group '{group_name}'")
+        return True
 
     def remove_from_group(self, group_name: str, process_name: str):
         """Remove a process from a group"""
@@ -193,19 +196,22 @@ class ChildMinderManager:
                 del groups[group_name]
             self.save_config(config)
             print(f"Removed '{process_name}' from group '{group_name}'")
-        elif isinstance(members, list):
+            return True
+        if isinstance(members, list):
             print(f"'{process_name}' is not in group '{group_name}'")
         else:
             print(f"Group '{group_name}' does not exist")
+        return False
 
     def set_group_limit(self, group_name: str, minutes: int):
         """Set time limit for a group"""
         if not self._check_minutes(minutes):
-            return
+            return False
         config = self.load_config()
         self._dict_entry(config, 'group_limits')[group_name] = minutes
         self.save_config(config)
         print(f"Set time limit for group '{group_name}' to {minutes} minutes")
+        return True
 
     def remove_group_limit(self, group_name: str):
         """Remove time limit for a group"""
@@ -215,13 +221,14 @@ class ChildMinderManager:
             del limits[group_name]
             self.save_config(config)
             print(f"Removed time limit for group '{group_name}'")
-        else:
-            print(f"Group '{group_name}' has no time limit set")
+            return True
+        print(f"Group '{group_name}' has no time limit set")
+        return False
 
     def set_user_daily_limit(self, username: str, minutes: int, day_type: str = 'both'):
         """Set overall daily screen time limit for a user (weekday, weekend, or both)"""
         if not self._check_minutes(minutes):
-            return
+            return False
         config = self.load_config()
         limits = self._dict_entry(config, 'user_daily_limits')
         entry = limits.get(username, {})
@@ -250,6 +257,7 @@ class ChildMinderManager:
             print(f"Set daily screen time limit for '{username}' to {minutes} minutes (weekday and weekend)")
         else:
             print(f"Set {day_type} daily screen time limit for '{username}' to {minutes} minutes")
+        return True
 
     def remove_user_daily_limit(self, username: str):
         """Remove overall daily screen time limit for a user"""
@@ -259,8 +267,9 @@ class ChildMinderManager:
             del limits[username]
             self.save_config(config)
             print(f"Removed daily screen time limit for '{username}'")
-        else:
-            print(f"'{username}' has no daily screen time limit set")
+            return True
+        print(f"'{username}' has no daily screen time limit set")
+        return False
     
     def list_groups(self):
         """List all process groups and their limits"""
@@ -279,15 +288,17 @@ class ChildMinderManager:
                 print(f"\n{group_name} (Limit: {limit}):")
                 for proc in processes:
                     print(f"  - {proc}")
+        return True
     
     def set_time_limit(self, process_name: str, minutes: int):
         """Set time limit for a process"""
         if not self._check_minutes(minutes):
-            return
+            return False
         config = self.load_config()
         self._dict_entry(config, 'limited_processes')[process_name] = minutes
         self.save_config(config)
         print(f"Set time limit for '{process_name}' to {minutes} minutes")
+        return True
 
     def remove_time_limit(self, process_name: str):
         """Remove time limit for a process"""
@@ -297,8 +308,9 @@ class ChildMinderManager:
             del limits[process_name]
             self.save_config(config)
             print(f"Removed time limit for '{process_name}'")
-        else:
-            print(f"'{process_name}' has no time limit set")
+            return True
+        print(f"'{process_name}' has no time limit set")
+        return False
 
     def add_monitored_user(self, username: str):
         """Add a user to monitor"""
@@ -310,6 +322,7 @@ class ChildMinderManager:
             print(f"Added '{username}' to monitored users")
         else:
             print(f"'{username}' is already monitored")
+        return True
 
     def remove_monitored_user(self, username: str):
         """Remove a user from monitoring"""
@@ -319,8 +332,9 @@ class ChildMinderManager:
             users.remove(username)
             self.save_config(config)
             print(f"Removed '{username}' from monitored users")
-        else:
-            print(f"'{username}' is not monitored")
+            return True
+        print(f"'{username}' is not monitored")
+        return False
             
     def show_config(self):
         """Display current configuration"""
@@ -364,6 +378,7 @@ class ChildMinderManager:
         print(f"\nMonitored Processes (for logging):")
         for proc in config.get('monitored_processes', []):
             print(f"  - {proc}")
+        return True
             
     def show_usage(self):
         """Display usage statistics"""
@@ -406,6 +421,7 @@ class ChildMinderManager:
 
         if not any(report.values()):
             print("No usage data available")
+        return True
                     
     def reset_usage(self):
         """Reset usage statistics.
@@ -423,9 +439,9 @@ class ChildMinderManager:
                                     capture_output=True, text=True)
             if result.returncode != 0:
                 print(f"Error: Could not signal {SERVICE}: {result.stderr.strip()}")
-                return
+                return False
             print("Usage statistics reset requested; the service will clear its counters")
-            return
+            return True
 
         state = self.load_state()
         state.update(policy.Usage().to_state())
@@ -433,15 +449,18 @@ class ChildMinderManager:
         try:
             atomic_write_json(self.state_path, state)
             print("Usage statistics reset successfully")
+            return True
         except Exception as e:
             print(f"Error resetting usage: {e}")
+            return False
             
     def service_status(self):
         """Show service status"""
         result = subprocess.run(['systemctl', 'status', 'child-minder'],
                               capture_output=True, text=True)
         print(result.stdout)
-        
+        return True
+
     def view_logs(self, lines: int = 50):
         """View recent log entries"""
         print(f"\n=== Last {lines} log entries ===")
@@ -449,8 +468,9 @@ class ChildMinderManager:
                               capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Error: {result.stderr.strip()} (try: sudo cmctl logs)")
-            return
+            return False
         print(result.stdout)
+        return True
         
     def enable_monitoring(self, enable: bool = True):
         """Enable or disable monitoring"""
@@ -459,25 +479,26 @@ class ChildMinderManager:
         self.save_config(config)
         status = "enabled" if enable else "disabled"
         print(f"Monitoring {status}")
+        return True
     
     def disable_user_account(self, username: str, reason: str = "Administrative action",
                             hours: Optional[float] = None):
         """Disable a user account"""
         if hours is not None and not 0 < hours < float("inf"):
             print("Error: Duration must be a positive number of hours")
-            return
+            return False
         try:
             try:
                 uid = pwd.getpwnam(username).pw_uid
             except KeyError:
                 print(f"Error: User {username} does not exist")
-                return
+                return False
             # The daemon never acts on system accounts, and expiring one such
             # as root can lock the administrator out.
             _, uid_max = cfg.read_uid_range()
             if not self.effective_config()["min_uid"] <= uid <= uid_max:
                 print(f"Error: {username} is a system account and cannot be disabled")
-                return
+                return False
 
             disable_info = {
                 "disabled_at": datetime.now().isoformat(),
@@ -505,7 +526,7 @@ class ChildMinderManager:
                     else:
                         user_control["disabled_users"][username] = previous
                     self._save_user_control(user_control)
-                    return
+                    return False
 
             if hours is not None:
                 print(f"User {username} disabled for {hours} hours")
@@ -518,32 +539,36 @@ class ChildMinderManager:
             
             print(f"Account disabled and sessions terminated for: {username}")
             print(f"Reason: {reason}")
-            
+            return True
+
         except Exception as e:
             print(f"Error disabling user: {e}")
+            return False
     
     def enable_user_account(self, username: str):
         """Enable a user account"""
         if self._regular_account_uid(username) is None:
-            return
+            return False
         try:
             with self._edit_user_control() as user_control:
                 if username not in user_control["disabled_users"]:
                     print(f"Error: {username} is not disabled by Child Minder")
-                    return
+                    return False
                 error, note = accounts.unlock(username, run_command)
                 if error:
                     print(f"Error: Failed to enable account: {error}")
-                    return
+                    return False
                 if note:
                     print(f"Note: password stayed locked ({note})")
 
                 user_control["disabled_users"].pop(username, None)
 
             print(f"User account enabled: {username}")
-            
+            return True
+
         except Exception as e:
             print(f"Error enabling user: {e}")
+            return False
     
     def _window(self, start_hour: int, end_hour: int) -> Optional[dict]:
         """Return the window for an hour range, or None after reporting why it is invalid"""
@@ -613,7 +638,7 @@ class ChildMinderManager:
         """
         window = self._window(start_hour, end_hour)
         if window is None:
-            return
+            return False
         with self._edit_user_control() as user_control:
             sched = self._user_schedule(user_control, username)
             schedule.set_window(sched, day, window)
@@ -633,35 +658,37 @@ class ChildMinderManager:
             elif schedule.is_unrestricted(sched, other):
                 print(f"{other.capitalize()} access is unrestricted; set it with: "
                       f"cmctl set-{other}-hours {username} START END")
+        return True
 
     def add_window(self, username: str, day: str, start_hour: int, end_hour: int):
         """Add an access window to a day type"""
         window = self._window(start_hour, end_hour)
         if window is None:
-            return
+            return False
         with self._edit_user_control() as user_control:
             sched = self._user_schedule(user_control, username)
             if not schedule.add_window(sched, day, window):
                 print(f"Window {schedule.format_hour_range(start_hour, end_hour)} "
                       f"already exists for {day}s")
-                return
+                return True
             self._store_schedule(user_control, username, sched)
             print(f"Added {day} window for {username}: "
                   f"{schedule.format_hour_range(start_hour, end_hour)}")
             print(f"{day.capitalize()} windows: {schedule.format_windows(sched[day])}")
+        return True
 
     def remove_window(self, username: str, day: str, start_hour: int, end_hour: int):
         """Remove an access window from a day type"""
         with self._edit_user_control() as user_control:
             if username not in user_control["daily_schedules"]:
                 print(f"No schedule found for user {username}")
-                return
+                return False
             sched = self._user_schedule(user_control, username)
             window = {"start_hour": start_hour, "end_hour": end_hour}
             if not schedule.remove_window(sched, day, window):
                 print(f"Window {schedule.format_hour_range(start_hour, end_hour)} "
                       f"not found in {day} schedule")
-                return
+                return False
             self._store_schedule(user_control, username, sched)
             print(f"Removed {day} window for {username}: "
                   f"{schedule.format_hour_range(start_hour, end_hour)}")
@@ -671,6 +698,7 @@ class ChildMinderManager:
                 print(f"No {day} windows remaining - {username} now has no {day} access")
                 print(f"Allow it again with: cmctl set-{day}-hours {username} START END, "
                       f"or cmctl clear-{day}-windows {username} for unrestricted access")
+        return True
 
     def clear_windows(self, username: str, day: str):
         """Make a day type unrestricted"""
@@ -679,7 +707,7 @@ class ChildMinderManager:
             label = day.capitalize()
             if schedule.is_unrestricted(sched, day):
                 print(f"{label} access for {username} is already unrestricted")
-                return
+                return True
             schedule.clear(sched, day)
             self._store_schedule(user_control, username, sched)
             if schedule.is_empty(sched):
@@ -689,6 +717,7 @@ class ChildMinderManager:
                 other = self._other_day(day)
                 print(f"Cleared {day} windows for {username}; {day} access is now unrestricted")
                 print(f"{other.capitalize()} access: {schedule.format_day(sched, other)}")
+        return True
 
     def deny_access(self, username: str, day: str):
         """Deny all access on a day type, replacing any windows it had"""
@@ -696,23 +725,25 @@ class ChildMinderManager:
             sched = self._user_schedule(user_control, username)
             if schedule.is_denied(sched, day):
                 print(f"{username} already has no {day} access")
-                return
+                return True
             schedule.deny(sched, day)
             self._store_schedule(user_control, username, sched)
             days = "Mon-Fri" if day == "weekday" else "Sat-Sun"
             print(f"{username} now has no {day} access ({days}) and will be logged out")
             print(f"Restore it with: cmctl set-{day}-hours {username} START END, "
                   f"or cmctl clear-{day}-windows {username} for unrestricted access")
+        return True
 
     def clear_user_hours(self, username: str):
         """Remove a user's access schedule entirely, allowing access at any time"""
         with self._edit_user_control() as user_control:
             if username not in user_control["daily_schedules"]:
                 print(f"Access hours for {username} are already unrestricted")
-                return
+                return True
             del user_control["daily_schedules"][username]
             print(f"Cleared all access hours for {username}; "
                   f"access is now unrestricted at any time")
+        return True
 
     def show_user_status(self, username: str = None):
         """Show user account status"""
@@ -728,7 +759,7 @@ class ChildMinderManager:
                     pwd.getpwnam(username)
                 except KeyError:
                     print(f"User {username} does not exist")
-                    return
+                    return False
                 
                 # Check if disabled
                 if username in user_control.get("disabled_users", {}):
@@ -771,9 +802,11 @@ class ChildMinderManager:
                         for line in schedule.describe(self._user_schedule(user_control, user),
                                                       indent="  "):
                             print(line)
-                        
+            return True
+
         except Exception as e:
             print(f"Error showing user status: {e}")
+            return False
 
 def main():
     parser = argparse.ArgumentParser(description='Child Minder Management Utility (cmctl)')
@@ -944,67 +977,70 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
     manager = ChildMinderManager()
     
     if args.command == 'block':
-        manager.add_blocked_process(args.process)
+        succeeded = manager.add_blocked_process(args.process)
     elif args.command == 'unblock':
-        manager.remove_blocked_process(args.process)
+        succeeded = manager.remove_blocked_process(args.process)
     elif args.command == 'limit':
-        manager.set_time_limit(args.process, args.minutes)
+        succeeded = manager.set_time_limit(args.process, args.minutes)
     elif args.command == 'unlimit':
-        manager.remove_time_limit(args.process)
+        succeeded = manager.remove_time_limit(args.process)
     elif args.command == 'add-to-group':
-        manager.add_to_group(args.group, args.process)
+        succeeded = manager.add_to_group(args.group, args.process)
     elif args.command == 'remove-from-group':
-        manager.remove_from_group(args.group, args.process)
+        succeeded = manager.remove_from_group(args.group, args.process)
     elif args.command == 'group-limit':
-        manager.set_group_limit(args.group, args.minutes)
+        succeeded = manager.set_group_limit(args.group, args.minutes)
     elif args.command == 'group-unlimit':
-        manager.remove_group_limit(args.group)
+        succeeded = manager.remove_group_limit(args.group)
     elif args.command == 'user-limit':
-        manager.set_user_daily_limit(args.username, args.minutes, 'both')
+        succeeded = manager.set_user_daily_limit(args.username, args.minutes, 'both')
     elif args.command == 'user-weekday-limit':
-        manager.set_user_daily_limit(args.username, args.minutes, 'weekday')
+        succeeded = manager.set_user_daily_limit(args.username, args.minutes, 'weekday')
     elif args.command == 'user-weekend-limit':
-        manager.set_user_daily_limit(args.username, args.minutes, 'weekend')
+        succeeded = manager.set_user_daily_limit(args.username, args.minutes, 'weekend')
     elif args.command == 'user-unlimit':
-        manager.remove_user_daily_limit(args.username)
+        succeeded = manager.remove_user_daily_limit(args.username)
     elif args.command == 'groups':
-        manager.list_groups()
+        succeeded = manager.list_groups()
     elif args.command == 'add-user':
-        manager.add_monitored_user(args.username)
+        succeeded = manager.add_monitored_user(args.username)
     elif args.command == 'remove-user':
-        manager.remove_monitored_user(args.username)
+        succeeded = manager.remove_monitored_user(args.username)
     elif args.command == 'config':
-        manager.show_config()
+        succeeded = manager.show_config()
     elif args.command == 'usage':
-        manager.show_usage()
+        succeeded = manager.show_usage()
     elif args.command == 'status':
-        manager.service_status()
+        succeeded = manager.service_status()
     elif args.command == 'reset':
-        manager.reset_usage()
+        succeeded = manager.reset_usage()
     elif args.command == 'logs':
-        manager.view_logs(args.lines)
+        succeeded = manager.view_logs(args.lines)
     elif args.command == 'enable':
-        manager.enable_monitoring(True)
+        succeeded = manager.enable_monitoring(True)
     elif args.command == 'disable':
-        manager.enable_monitoring(False)
+        succeeded = manager.enable_monitoring(False)
     elif args.command == 'disable-user':
-        manager.disable_user_account(args.username, args.reason, args.hours)
+        succeeded = manager.disable_user_account(args.username, args.reason, args.hours)
     elif args.command == 'enable-user':
-        manager.enable_user_account(args.username)
+        succeeded = manager.enable_user_account(args.username)
     elif args.command in ('set-weekday-hours', 'set-weekend-hours'):
-        manager.set_hours(args.username, args.command.split('-')[1], args.start, args.end)
+        succeeded = manager.set_hours(args.username, args.command.split('-')[1], args.start, args.end)
     elif args.command == 'set-user-hours':
-        manager.set_hours(args.username, "weekday", args.start, args.end,
+        succeeded = manager.set_hours(args.username, "weekday", args.start, args.end,
                           fill_empty_weekend=True)
     elif args.command in ('add-weekday-window', 'add-weekend-window'):
-        manager.add_window(args.username, args.command.split('-')[1], args.start, args.end)
+        succeeded = manager.add_window(args.username, args.command.split('-')[1], args.start, args.end)
     elif args.command in ('remove-weekday-window', 'remove-weekend-window'):
-        manager.remove_window(args.username, args.command.split('-')[1], args.start, args.end)
+        succeeded = manager.remove_window(args.username, args.command.split('-')[1], args.start, args.end)
     elif args.command in ('clear-weekday-windows', 'clear-weekend-windows'):
-        manager.clear_windows(args.username, args.command.split('-')[1])
+        succeeded = manager.clear_windows(args.username, args.command.split('-')[1])
     elif args.command in ('deny-weekday-access', 'deny-weekend-access'):
-        manager.deny_access(args.username, args.command.split('-')[1])
+        succeeded = manager.deny_access(args.username, args.command.split('-')[1])
     elif args.command == 'clear-user-hours':
-        manager.clear_user_hours(args.username)
+        succeeded = manager.clear_user_hours(args.username)
     elif args.command == 'user-status':
-        manager.show_user_status(args.username)
+        succeeded = manager.show_user_status(args.username)
+
+    if not succeeded:
+        sys.exit(1)

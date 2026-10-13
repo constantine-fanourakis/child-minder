@@ -185,6 +185,11 @@ read-only commands (`config`, `usage`, `status`, `logs`, `groups`,
 and logs they read are readable only by root, so on a standard install only
 `status` works without `sudo`. You can use either `cmctl` or `cmctl.py`.
 
+cmctl exits with status 1 when a command could not do what was asked: invalid
+input, a name that is not there to remove, an unreadable file, or a failed
+system step. A command whose requested state already holds, such as blocking
+a process that is already blocked, exits with status 0.
+
 ### View information
 
 ```bash

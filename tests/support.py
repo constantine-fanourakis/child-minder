@@ -136,15 +136,19 @@ class CmctlTestCase(unittest.TestCase):
         return self.fake_run_result(argv)
 
     def run_cmctl(self, *argv) -> str:
-        """Run cmctl's main() with argv, returning everything it printed"""
+        """Run cmctl's main() with argv, returning everything it printed.
+
+        The exit status is left in self.exit_status.
+        """
         out = []
+        self.exit_status = 0
         with mock.patch('sys.argv', ['cmctl', *argv]), \
                 mock.patch('builtins.print',
                            side_effect=lambda *a, **k: out.append(' '.join(map(str, a)))):
             try:
                 cmctl.main()
-            except SystemExit:
-                pass
+            except SystemExit as e:
+                self.exit_status = e.code
         return '\n'.join(out)
 
     def read_json(self, path: Path) -> dict:
