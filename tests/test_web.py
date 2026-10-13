@@ -1,7 +1,13 @@
-"""Tests for the web UI server, run against a real server on a loopback port"""
+"""Tests for the web UI: the front end on a loopback port, and the broker.
+
+The front end is tested against a broker running in-process; the Unix
+socket between them has tests of its own.
+"""
 
 import http.client
 import json
+import os
+import socket
 import tempfile
 import threading
 import unittest
@@ -9,6 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
+from childminder import broker
 from childminder import config as cfg
 from childminder import web
 from childminder import webauth
@@ -33,15 +40,19 @@ class WebTestCase(unittest.TestCase):
             self.write(self.web_config_path,
                        {"password": webauth.hash_password(self.password)})
 
-        for target, kwargs in ((cfg, {"return_value": UID_RANGE}),
-                               (web.subprocess, {"return_value": mock.Mock(stdout="active\n")})):
-            name = "read_uid_range" if target is cfg else "run"
-            patcher = mock.patch.object(target, name, **kwargs)
-            self.run_mock = patcher.start()
-            self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(cfg, "read_uid_range", return_value=UID_RANGE)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(broker.subprocess, "run",
+                                    return_value=mock.Mock(stdout="active\n"))
+        self.run_mock = patcher.start()
+        self.addCleanup(patcher.stop)
 
-        self.app = web.WebApp(self.web_config_path, self.config_path, self.state_path,
-                              self.log_path, self.user_control_path)
+        self.broker = broker.Broker(self.config_path, self.state_path, self.log_path,
+                                    self.user_control_path)
+        # Through JSON, as over the socket
+        self.app = web.WebApp(self.web_config_path, lambda request: json.loads(
+            json.dumps(self.broker.handle(json.loads(json.dumps(request))))))
         self.server = web.Server(("127.0.0.1", 0), self.app)
         thread = threading.Thread(target=self.server.serve_forever,
                                   kwargs={"poll_interval": 0.01}, daemon=True)
@@ -261,7 +272,7 @@ class OverviewTest(WebTestCase):
         self.write(self.config_path, {"monitored_users": []})
         accounts = [mock.Mock(pw_name=name, pw_uid=uid)
                     for name, uid in (("root", 0), ("kid", 1001), ("nobody", 65534))]
-        with mock.patch.object(web.pwd, "getpwall", return_value=accounts):
+        with mock.patch.object(broker.pwd, "getpwall", return_value=accounts):
             names = [u["name"] for u in self.overview()["users"]]
         self.assertEqual(names, ["kid"])
 
@@ -311,7 +322,7 @@ class ConfigAndLogsTest(WebTestCase):
         self.assertEqual(body["lines"], ["line 7", "line 8", "line 9"])
 
     def test_long_log_drops_the_partial_first_line(self):
-        self.log_path.write_text("x" * (web.LOG_TAIL_BYTES + 10) + "\nlast\n")
+        self.log_path.write_text("x" * (broker.LOG_TAIL_BYTES + 10) + "\nlast\n")
         status, _, body = self.request("GET", "/api/logs?lines=5")
         self.assertEqual(body["lines"], ["last"])
 
@@ -339,3 +350,77 @@ class SettingsTest(unittest.TestCase):
         with self.assertLogs("childminder.web", "WARNING"):
             settings = web.load_settings(self.path)
         self.assertEqual(settings, {"bind": "127.0.0.1", "port": web.DEFAULT_PORT})
+
+
+class BrokerRequestTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name)
+        self.broker = broker.Broker(path / "config.json", path / "state.json",
+                                    path / "minder.log", path / "user_control.json")
+
+    def test_unknown_operation_is_refused(self):
+        for request in ({"op": "handle"}, {"op": "__init__"}, {}, [], "overview"):
+            self.assertEqual(self.broker.handle(request)["status"], 400, request)
+
+    def test_unexpected_error_is_reported_without_details(self):
+        with mock.patch.object(self.broker, "config_view", side_effect=RuntimeError("x")), \
+                self.assertLogs("childminder.broker", "ERROR"):
+            self.assertEqual(self.broker.handle({"op": "config"}),
+                             {"status": 500, "error": "Internal error"})
+
+    def test_log_line_count_must_be_a_number(self):
+        self.assertEqual(self.broker.handle({"op": "logs", "lines": "5"})["status"], 400)
+
+
+class BrokerSocketTest(unittest.TestCase):
+    """The front end reaches the broker over a Unix socket"""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = str(Path(tmp.name) / "broker.sock")
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(self.listener.close)
+        self.listener.bind(self.path)
+        self.listener.listen()
+        self.broker = mock.Mock(handle=lambda request: {"result": request})
+
+    def serve_one(self):
+        def accept():
+            conn, _ = self.listener.accept()
+            with conn:
+                broker.serve_connection(self.broker, conn)
+        thread = threading.Thread(target=accept, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+
+    def test_request_and_response_cross_the_socket(self):
+        self.serve_one()
+        own = mock.Mock(pw_uid=os.getuid())
+        with mock.patch.object(broker.pwd, "getpwnam", return_value=own):
+            response = web.socket_broker(self.path)({"op": "logs", "lines": 3})
+        self.assertEqual(response, {"result": {"op": "logs", "lines": 3}})
+
+    @unittest.skipIf(os.geteuid() == 0, "root is always allowed")
+    def test_other_users_are_refused(self):
+        self.serve_one()
+        with mock.patch.object(broker.pwd, "getpwnam", side_effect=KeyError):
+            response = web.socket_broker(self.path)({"op": "logs"})
+        self.assertEqual(response, {"status": 403, "error": "Not allowed"})
+
+    def test_unreachable_broker_is_reported(self):
+        with self.assertLogs("childminder.web", "WARNING"):
+            response = web.socket_broker(self.path + ".missing")({"op": "logs"})
+        self.assertEqual(response["status"], 503)
+
+    def test_front_end_turns_broker_errors_into_api_errors(self):
+        app = web.WebApp(Path(self.path), lambda request: {"status": 422, "error": "no"})
+        with self.assertRaises(web.ApiError) as raised:
+            app.ask_broker({"op": "logs"})
+        self.assertEqual((raised.exception.status, str(raised.exception)), (422, "no"))
+        app = web.WebApp(Path(self.path), lambda request: ["junk"])
+        with self.assertRaises(web.ApiError) as raised:
+            app.ask_broker({"op": "logs"})
+        self.assertEqual(raised.exception.status, 502)

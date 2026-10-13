@@ -1,8 +1,9 @@
-"""Web UI: a password-protected dashboard served over HTTP.
+"""Web UI front end: a password-protected dashboard served over HTTP.
 
-Reads come from the files the daemon and cmctl keep, through the same
-modules they use. The usage counters are the ones the daemon saves to
-state.json once a minute, so they lag the running daemon by up to a minute.
+This process runs as the unprivileged child-minder-web user and handles
+everything that faces the network: HTTP, login, sessions and CSRF. Anything
+that needs root is one request to the broker (childminder/broker.py) over
+its Unix socket.
 
 Sessions live in memory, so a restart logs everyone out. The password record
 in web.json is read on every login and session check: setting a new password
@@ -13,32 +14,23 @@ import hmac
 import http.server
 import json
 import logging
-import pwd
 import secrets
-import subprocess
+import socket
 import sys
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from http import HTTPStatus, cookies
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urlsplit
 
-from childminder import config as cfg
-from childminder import policy
-from childminder import schedule
 from childminder import store
 from childminder import webauth
+from childminder.broker import BROKER_SOCKET
 
 WEB_CONFIG_PATH = "/etc/child-minder/web.json"
-CONFIG_PATH = "/etc/child-minder/config.json"
-STATE_PATH = "/var/lib/child-minder/state.json"
-LOG_PATH = "/var/log/child-minder/minder.log"
-USER_CONTROL_PATH = "/var/lib/child-minder/user_control.json"
 
-SERVICE = "child-minder"
 DEFAULT_PORT = 8765
 DEFAULT_BIND = "0.0.0.0"
 
@@ -54,8 +46,8 @@ SESSION_SECONDS = 12 * 3600
 MAX_FAILURES = 5
 LOCKOUT_SECONDS = 300
 MAX_BODY_BYTES = 64 * 1024
-MAX_LOG_LINES = 1000
-LOG_TAIL_BYTES = 256 * 1024
+MAX_RESPONSE_BYTES = 32 * 1024 * 1024
+BROKER_TIMEOUT = 120
 
 SECURITY_HEADERS = {
     "Content-Security-Policy": ("default-src 'self'; img-src 'self' data: blob:; "
@@ -94,26 +86,27 @@ def load_settings(path: Path) -> dict:
     return {"bind": bind, "port": port}
 
 
-def tail_lines(path: Path, count: int) -> list:
-    """Return the last count lines of a text file, reading at most LOG_TAIL_BYTES"""
-    with open(path, "rb") as f:
-        f.seek(0, 2)
-        size = f.tell()
-        f.seek(max(0, size - LOG_TAIL_BYTES))
-        data = f.read()
-    lines = data.decode(errors="replace").splitlines()
-    if size > LOG_TAIL_BYTES:
-        lines = lines[1:]  # The first line read is most likely partial
-    return lines[-count:] if count else []
-
-
-def usage_line(line: Optional[policy.UsageLine], seconds: float = 0.0,
-               limit_seconds: Optional[float] = None) -> dict:
-    if line is not None:
-        seconds, limit_seconds = line.seconds, line.limit_seconds
-    remaining = None if limit_seconds is None else max(0.0, limit_seconds - seconds)
-    return {"seconds": seconds, "limit_seconds": limit_seconds,
-            "remaining_seconds": remaining}
+def socket_broker(path: str) -> Callable[[dict], dict]:
+    """Return a function that sends one request to the broker at path"""
+    def call(request: dict) -> dict:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+                conn.settimeout(BROKER_TIMEOUT)
+                conn.connect(path)
+                conn.sendall(json.dumps(request).encode())
+                conn.shutdown(socket.SHUT_WR)
+                data = b""
+                while len(data) <= MAX_RESPONSE_BYTES:
+                    chunk = conn.recv(1 << 20)
+                    if not chunk:
+                        break
+                    data += chunk
+            return json.loads(data)
+        except (OSError, ValueError) as e:
+            logger.warning(f"Broker request failed: {e}")
+            return {"status": HTTPStatus.SERVICE_UNAVAILABLE,
+                    "error": "The child-minder broker did not answer"}
+    return call
 
 
 @dataclass
@@ -124,15 +117,11 @@ class Session:
 
 
 class WebApp:
-    """State shared by every request: sessions, login failures and file paths"""
+    """State shared by every request: sessions, login failures and the broker"""
 
-    def __init__(self, web_config_path: Path, config_path: Path, state_path: Path,
-                 log_path: Path, user_control_path: Path):
+    def __init__(self, web_config_path: Path, broker: Callable[[dict], dict]):
         self.web_config_path = Path(web_config_path)
-        self.config_path = Path(config_path)
-        self.state_path = Path(state_path)
-        self.log_path = Path(log_path)
-        self.user_control = store.UserControlStore(Path(user_control_path))
+        self.broker = broker
         self.sessions: Dict[str, Session] = {}
         self.failures: Dict[str, Tuple[int, float]] = {}  # ip: (count, locked until)
         self.lock = threading.Lock()
@@ -215,101 +204,15 @@ class WebApp:
                    if count == 0 and until <= now]:
             del self.failures[ip]
 
-    # -- reads --
-
-    def effective_config(self, warnings: list) -> dict:
-        try:
-            raw = cfg.read_file(self.config_path)
-        except cfg.ConfigError as e:
-            raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, str(e))
-        uid_min, _ = cfg.read_uid_range()
-        return cfg.validate(raw, warnings.append, uid_min)
-
-    def service_state(self) -> str:
-        try:
-            result = subprocess.run(["systemctl", "is-active", SERVICE],
-                                    capture_output=True, text=True, timeout=10)
-        except (OSError, subprocess.TimeoutExpired):
-            return "unknown"
-        return result.stdout.strip() or "unknown"
-
-    def user_names(self, config: dict, usage: policy.Usage, user_control: dict) -> list:
-        """Users to show: the monitored ones, plus any with usage, limits or records"""
-        monitored = config["monitored_users"]
-        if monitored is None:
-            names = []
-        elif monitored:
-            names = list(monitored)
-        else:
-            _, uid_max = cfg.read_uid_range()
-            names = sorted(p.pw_name for p in pwd.getpwall()
-                           if config["min_uid"] <= p.pw_uid <= uid_max)
-        for extra in (usage.daily, usage.processes, usage.groups,
-                      user_control["disabled_users"], user_control["daily_schedules"],
-                      config["user_daily_limits"]):
-            names += [name for name in extra if name not in names]
-        return names
-
-    def overview(self) -> dict:
-        now = datetime.now()
-        warnings = []
-        config = self.effective_config(warnings)
-        try:
-            state = store.read_json(self.state_path) or {}
-        except store.StoreError as e:
-            warnings.append(str(e))
-            state = {}
-        usage = policy.Usage.from_state(state, warnings.append)
-        try:
-            user_control = self.user_control.load(warnings.append)
-        except store.StoreError as e:
-            warnings.append(str(e))
-            user_control = store.normalize_user_control({})
-        report = policy.usage_report(usage, config, now)
-
-        users = []
-        for name in self.user_names(config, usage, user_control):
-            sched = schedule.normalize(user_control["daily_schedules"].get(name))
-            daily = next((line for line in report["daily"] if line.username == name), None)
-            users.append({
-                "name": name,
-                "disabled": user_control["disabled_users"].get(name),
-                "schedule": sched,
-                "schedule_days": {day: schedule.format_day(sched, day)
-                                  for day in cfg.DAY_TYPES},
-                "allowed_now": schedule.is_allowed(sched, now),
-                "daily": usage_line(daily, limit_seconds=policy.daily_limit(config, name, now)),
-                "processes": [dict(usage_line(line), subject=line.subject)
-                              for line in report["process"] if line.username == name],
-                "groups": [dict(usage_line(line), subject=line.subject)
-                           for line in report["group"] if line.username == name],
-            })
-
-        try:
-            saved = datetime.fromtimestamp(self.state_path.stat().st_mtime).isoformat()
-        except OSError:
-            saved = None
-        return {
-            "now": now.isoformat(timespec="seconds"),
-            "day_type": cfg.day_type(now),
-            "service": self.service_state(),
-            "monitoring": config["enabled"],
-            "last_reset": state.get("last_reset"),
-            "state_saved": saved,
-            "users": users,
-            "warnings": warnings,
-        }
-
-    def config_view(self) -> dict:
-        warnings = []
-        config = self.effective_config(warnings)
-        return {"config": config, "warnings": warnings}
-
-    def logs(self, count: int) -> dict:
-        try:
-            return {"lines": tail_lines(self.log_path, count)}
-        except OSError as e:
-            raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE, f"Could not read the log: {e}")
+    def ask_broker(self, request: dict):
+        """Return the result of a broker request, raising ApiError for its error"""
+        response = self.broker(request)
+        if not isinstance(response, dict) or "result" not in response:
+            status = response.get("status") if isinstance(response, dict) else None
+            error = response.get("error") if isinstance(response, dict) else None
+            raise ApiError(status if isinstance(status, int) else HTTPStatus.BAD_GATEWAY,
+                           error if isinstance(error, str) else "Invalid broker response")
+        return response["result"]
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -448,17 +351,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return {"authenticated": False}
 
     def get_overview(self, body) -> dict:
-        return self.app.overview()
+        return self.app.ask_broker({"op": "overview"})
 
     def get_config(self, body) -> dict:
-        return self.app.config_view()
+        return self.app.ask_broker({"op": "config"})
 
     def get_logs(self, body) -> dict:
         try:
             count = int(self.query.get("lines", ["100"])[0])
         except ValueError:
             raise ApiError(HTTPStatus.BAD_REQUEST, "lines must be a number")
-        return self.app.logs(max(0, min(count, MAX_LOG_LINES)))
+        return self.app.ask_broker({"op": "logs", "lines": count})
 
 
 class Server(http.server.ThreadingHTTPServer):
@@ -473,8 +376,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s",
                         stream=sys.stderr)
     settings = load_settings(Path(WEB_CONFIG_PATH))
-    app = WebApp(Path(WEB_CONFIG_PATH), Path(CONFIG_PATH), Path(STATE_PATH),
-                 Path(LOG_PATH), Path(USER_CONTROL_PATH))
+    app = WebApp(Path(WEB_CONFIG_PATH), socket_broker(BROKER_SOCKET))
     if app.password_record() is None:
         logger.warning("No password is set, so every login is refused; "
                        "set one with: sudo cmctl web-password")

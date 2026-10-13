@@ -125,6 +125,11 @@ class CmctlTestCase(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+        # The web UI's group is absent unless a test provides it
+        patcher = mock.patch.object(cmctl.grp, 'getgrnam', side_effect=KeyError)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def write_config(self, config: dict):
         with open(self.config_path, 'w') as f:
             json.dump(config, f)

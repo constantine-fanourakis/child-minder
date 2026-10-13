@@ -374,6 +374,20 @@ class WebPasswordTest(CmctlTestCase):
         self.assertTrue(webauth.verify_password("secret", stored))
         self.assertEqual(os.stat(self.web_config_path).st_mode & 0o777, 0o600)
 
+    def test_web_ui_group_may_read_the_file(self):
+        group = mock.Mock(gr_gid=os.getgid())
+        with mock.patch.object(cmctl.grp, 'getgrnam', return_value=group) as getgrnam:
+            self.set_password("secret\n")
+        getgrnam.assert_called_with("child-minder-web")
+        info = os.stat(self.web_config_path)
+        self.assertEqual(info.st_mode & 0o777, 0o640)
+        self.assertEqual(info.st_gid, os.getgid())
+
+    def test_without_the_web_ui_group_the_file_stays_private(self):
+        with mock.patch.object(cmctl.grp, 'getgrnam', side_effect=KeyError):
+            self.set_password("secret\n")
+        self.assertEqual(os.stat(self.web_config_path).st_mode & 0o777, 0o600)
+
     def test_other_settings_are_kept(self):
         self.web_config_path.write_text('{"port": 9000}')
         self.set_password("secret\n")

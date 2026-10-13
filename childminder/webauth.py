@@ -9,6 +9,10 @@ import hashlib
 import hmac
 import os
 
+# System user the web front end runs as; its group may read web.json and
+# connect to the broker socket
+WEB_USER = "child-minder-web"
+
 SCRYPT_N = 2 ** 14
 SCRYPT_R = 8
 SCRYPT_P = 1

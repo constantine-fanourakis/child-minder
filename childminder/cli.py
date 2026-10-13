@@ -6,6 +6,7 @@ Provides easy management and reporting for the Child Minder system
 import sys
 import argparse
 import getpass
+import grp
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -594,11 +595,26 @@ class ChildMinderManager:
         web_config["password"] = webauth.hash_password(password)
         try:
             atomic_write_json(self.web_config_path, web_config)
+            self._share_with_web_ui(self.web_config_path)
         except OSError as e:
             print(f"Error saving {self.web_config_path}: {e}")
             return False
         print("Web UI password set")
         return True
+
+    @staticmethod
+    def _share_with_web_ui(path: Path):
+        """Let the web front end, which runs unprivileged, read path.
+
+        Without the web UI's group, as before it is installed, the file stays
+        readable by root only.
+        """
+        try:
+            gid = grp.getgrnam(webauth.WEB_USER).gr_gid
+        except KeyError:
+            return
+        os.chown(path, -1, gid)
+        os.chmod(path, 0o640)
 
     def _window(self, start_hour: int, end_hour: int) -> Optional[dict]:
         """Return the window for an hour range, or None after reporting why it is invalid"""
