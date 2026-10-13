@@ -168,6 +168,38 @@ function userStatus(user) {
   return el("span", { class: "badge ok" }, "Allowed now");
 }
 
+// Latest screenshot per user, kept across the periodic redraw: {url, taken}
+const screenshots = {};
+
+async function takeScreenshot(user, button) {
+  button.disabled = true;
+  button.textContent = "Taking screenshot...";
+  try {
+    const data = await api("POST", "/api/screenshot", { user });
+    const bytes = Uint8Array.from(atob(data.png), (c) => c.charCodeAt(0));
+    if (screenshots[user]) URL.revokeObjectURL(screenshots[user].url);
+    screenshots[user] = {
+      url: URL.createObjectURL(new Blob([bytes], { type: "image/png" })),
+      taken: data.taken,
+    };
+    showError(null);
+    await refresh();
+  } catch (e) {
+    showError(e.message);
+    button.disabled = false;
+    button.textContent = "Screenshot";
+  }
+}
+
+function screenshotView(user) {
+  const shot = screenshots[user];
+  if (!shot) return null;
+  return el("div", { class: "screenshot" },
+    el("a", { href: shot.url, target: "_blank", rel: "noopener" },
+      el("img", { src: shot.url, alt: `Screen of ${user}` })),
+    el("p", { class: "muted" }, `Taken ${when(shot.taken)}. Tap to open full size.`));
+}
+
 const LOCK_CHOICES = [["0.5", "30 minutes"], ["1", "1 hour"], ["2", "2 hours"],
                       ["4", "4 hours"], ["24", "1 day"], ["", "Until unlocked"]];
 
@@ -210,6 +242,8 @@ function renderUser(user) {
       el("li", {}, `Weekdays: ${user.schedule_days.weekday}`),
       el("li", {}, `Weekends: ${user.schedule_days.weekend}`)),
     lockControls(user));
+  const shoot = button("Screenshot", () => takeScreenshot(user.name, shoot));
+  card.append(el("div", { class: "actions" }, shoot), screenshotView(user.name));
   return card;
 }
 

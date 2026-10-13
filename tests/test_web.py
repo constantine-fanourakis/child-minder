@@ -4,6 +4,7 @@ The front end is tested against a broker running in-process; the Unix
 socket between them has tests of its own.
 """
 
+import base64
 import fcntl
 import http.client
 import json
@@ -542,6 +543,15 @@ class CommandTest(WebTestCase):
         self.assertEqual(self.post({"command": "reset"})[0], 401)
         self.assertEqual(self.ran(), [])
 
+    def test_screenshot_is_forwarded_with_the_client_address(self):
+        requests = []
+        self.app.broker = lambda request: requests.append(request) or {"result": {"png": ""}}
+        status, _, _ = self.request("POST", "/api/screenshot", {"user": "kid"})
+        self.assertEqual(status, 200)
+        self.assertEqual(requests, [{"op": "screenshot", "user": "kid", "client": "127.0.0.1"}])
+        self.csrf = "wrong"
+        self.assertEqual(self.request("POST", "/api/screenshot", {"user": "kid"})[0], 403)
+
     def test_unrunnable_cmctl_is_an_error(self):
         self.run_mock.side_effect = FileNotFoundError("missing")
         status, _, body = self.post({"command": "reset"})
@@ -568,3 +578,111 @@ class CommandArgvTest(unittest.TestCase):
                                     text=True, timeout=30)
             self.assertEqual(result.returncode, 1, (name, result.stdout, result.stderr))
             self.assertIn("must be run as root", result.stdout, name)
+
+
+class ScreenshotTest(unittest.TestCase):
+    PNG = b"\x89PNG\r\n\x1a\nimage"
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name)
+        atomic_write_json(path / "config.json", {"monitored_users": ["kid"]})
+        self.broker = broker.Broker(path / "config.json", path / "state.json",
+                                    path / "minder.log", path / "user_control.json",
+                                    path / "broker.lock")
+        self.kid = mock.Mock(pw_uid=1001, pw_gid=1001, pw_dir="/home/kid")
+        for target, name, kwargs in (
+                (cfg, "read_uid_range", {"return_value": UID_RANGE}),
+                (broker.pwd, "getpwnam", {"return_value": self.kid}),
+                (broker, "find_x_session",
+                 {"return_value": (":0", "/home/kid/.Xauthority")}),
+                (broker.shutil, "which",
+                 {"side_effect": lambda name, path: f"/usr/bin/{name}"}),
+                (broker.subprocess, "run",
+                 {"return_value": mock.Mock(returncode=0, stdout=self.PNG, stderr=b"")})):
+            patcher = mock.patch.object(target, name, **kwargs)
+            mocked = patcher.start()
+            self.addCleanup(patcher.stop)
+            setattr(self, f"{name}_mock", mocked)
+
+    def shoot(self, user="kid") -> dict:
+        return self.broker.handle({"op": "screenshot", "user": user, "client": "10.0.0.2"})
+
+    def test_capture_runs_as_the_user_with_a_fixed_environment(self):
+        with self.assertLogs("childminder.broker", "INFO") as logs:
+            response = self.shoot()
+        self.assertEqual(base64.b64decode(response["result"]["png"]), self.PNG)
+        self.assertEqual(response["result"]["display"], ":0")
+        argv = self.run_mock.call_args.args[0]
+        kwargs = self.run_mock.call_args.kwargs
+        self.assertEqual(argv, ["/usr/bin/import", "-window", "root", "png:-"])
+        self.assertEqual((kwargs["user"], kwargs["group"], kwargs["extra_groups"]),
+                         (1001, 1001, []))
+        self.assertEqual(kwargs["env"]["DISPLAY"], ":0")
+        self.assertEqual(kwargs["env"]["XAUTHORITY"], "/home/kid/.Xauthority")
+        self.assertEqual(kwargs["env"]["PATH"], broker.TOOL_PATH)
+        self.assertIn("10.0.0.2 took a screenshot of kid", "\n".join(logs.output))
+
+    def test_next_tool_is_used_when_the_first_is_missing(self):
+        self.which_mock.side_effect = lambda name, path: (
+            None if name == "import" else f"/usr/bin/{name}")
+        self.shoot()
+        argv = self.run_mock.call_args.args[0]
+        self.assertEqual(argv[0], "/usr/bin/ffmpeg")
+        self.assertIn(":0", argv)
+
+    def test_refusals(self):
+        cases = (
+            ("parent", None, 403),
+            ("", None, 400),
+            ("kid", lambda: setattr(self.getpwnam_mock, "side_effect", KeyError), 404),
+            ("kid", lambda: setattr(self.kid, "pw_uid", 0), 403),
+            ("kid", lambda: setattr(self.find_x_session_mock, "return_value", None), 404),
+            ("kid", lambda: setattr(self.which_mock, "side_effect", lambda n, path: None), 503),
+        )
+        for user, arrange, status in cases:
+            with self.subTest(user=user, status=status):
+                self.setUp()
+                if arrange:
+                    arrange()
+                self.assertEqual(self.shoot(user)["status"], status)
+                self.run_mock.assert_not_called()
+
+    def test_failed_capture_is_reported(self):
+        self.run_mock.return_value = mock.Mock(returncode=1, stdout=b"",
+                                               stderr=b"unable to open X server")
+        response = self.shoot()
+        self.assertEqual(response["status"], 502)
+        self.assertIn("unable to open X server", response["error"])
+
+    def test_output_that_is_not_a_png_is_refused(self):
+        self.run_mock.return_value = mock.Mock(returncode=0, stdout=b"GIF89a", stderr=b"")
+        self.assertEqual(self.shoot()["status"], 502)
+
+
+class FindXSessionTest(unittest.TestCase):
+    def processes(self, *entries):
+        procs = [mock.Mock(info={"uids": mock.Mock(real=uid), "environ": env})
+                 for uid, env in entries]
+        return mock.patch.object(broker.psutil, "process_iter", return_value=procs)
+
+    def test_display_and_xauthority_come_from_the_users_process(self):
+        with self.processes((1002, {"DISPLAY": ":1"}),
+                            (1001, {}),
+                            (1001, {"DISPLAY": ":0", "XAUTHORITY": "/run/user/1001/xauth"})):
+            self.assertEqual(broker.find_x_session(1001, "/home/kid"),
+                             (":0", "/run/user/1001/xauth"))
+
+    def test_missing_or_odd_xauthority_falls_back_to_home(self):
+        for xauthority in (None, "relative", "/tmp/x\nauth"):
+            env = {"DISPLAY": ":0"}
+            if xauthority:
+                env["XAUTHORITY"] = xauthority
+            with self.processes((1001, env)):
+                self.assertEqual(broker.find_x_session(1001, "/home/kid"),
+                                 (":0", "/home/kid/.Xauthority"))
+
+    def test_invalid_display_is_skipped(self):
+        with self.processes((1001, {"DISPLAY": ":0; rm -rf /"}), (1001, {"DISPLAY": "wayland"})):
+            self.assertIsNone(broker.find_x_session(1001, "/home/kid"))

@@ -17,11 +17,14 @@ Every change runs a cmctl subcommand from COMMANDS, so the web UI edits
 the files exactly as cmctl does, locks and service reload included.
 """
 
+import base64
 import fcntl
 import json
 import logging
 import os
 import pwd
+import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -29,7 +32,9 @@ import sys
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
+
+import psutil
 
 from childminder import config as cfg
 from childminder import policy
@@ -91,6 +96,19 @@ COMMANDS = {
 COMMAND_OPTIONS = {
     "disable-user": {"hours": "number", "reason": "text"},
 }
+SCREENSHOT_TIMEOUT = 20
+MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024
+# The display formats the daemon accepts for notifications
+DISPLAY_RE = re.compile(r'^[a-zA-Z0-9._-]*:[0-9]+(\.[0-9]+)?$')
+# X11 capture tools writing a PNG to stdout, tried in order; {display} is
+# replaced with the user's display
+SCREENSHOT_TOOLS = (
+    ("import", "-window", "root", "png:-"),
+    ("ffmpeg", "-loglevel", "error", "-f", "x11grab", "-i", "{display}",
+     "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"),
+)
+TOOL_PATH = "/usr/bin:/bin"
+
 # Commands whose first argument must be a monitored user, so the web
 # password cannot lock out an account the daemon does not watch
 MONITORED_USER_COMMANDS = {"disable-user", "enable-user"}
@@ -158,6 +176,35 @@ def is_monitored(config: dict, username: str) -> bool:
     return not users or username in users
 
 
+def find_x_session(uid: int, home: str) -> Optional[Tuple[str, str]]:
+    """Return (DISPLAY, XAUTHORITY) from one of uid's processes, or None.
+
+    A process without XAUTHORITY in its environment uses ~/.Xauthority.
+    """
+    for proc in psutil.process_iter(["uids", "environ"]):
+        uids = proc.info["uids"]
+        if uids is None or uids.real != uid:
+            continue
+        env = proc.info["environ"] or {}
+        display = env.get("DISPLAY", "")
+        if not DISPLAY_RE.match(display):
+            continue
+        xauthority = env.get("XAUTHORITY", "")
+        if not xauthority.startswith("/") or any(ord(c) < 32 for c in xauthority):
+            xauthority = os.path.join(home, ".Xauthority")
+        return display, xauthority
+    return None
+
+
+def screenshot_argv(display: str) -> Optional[list]:
+    """The first available capture tool's argv, with its absolute path"""
+    for tool in SCREENSHOT_TOOLS:
+        path = shutil.which(tool[0], path=TOOL_PATH)
+        if path:
+            return [path] + [arg.format(display=display) for arg in tool[1:]]
+    return None
+
+
 def tail_lines(path: Path, count: int) -> list:
     """Return the last count lines of a text file, reading at most LOG_TAIL_BYTES"""
     with open(path, "rb") as f:
@@ -186,6 +233,7 @@ class Broker:
         "config": "config_view",
         "logs": "logs",
         "commands": "run_commands",
+        "screenshot": "screenshot",
     }
 
     def __init__(self, config_path: Path, state_path: Path, log_path: Path,
@@ -305,6 +353,55 @@ class Broker:
         except OSError as e:
             raise RequestError(HTTPStatus.SERVICE_UNAVAILABLE, f"Could not read the log: {e}")
 
+
+    def screenshot(self, request: dict) -> dict:
+        """Capture a monitored user's X11 screen as a base64 PNG.
+
+        The capture tool runs as that user, which is what their X server's
+        authorization allows, with an environment set here rather than theirs.
+        """
+        username = request.get("user")
+        check_value("text", username, "user")
+        config = self.effective_config([])
+        if not is_monitored(config, username):
+            raise RequestError(HTTPStatus.FORBIDDEN, f"{username} is not a monitored user")
+        try:
+            pw = pwd.getpwnam(username)
+        except KeyError:
+            raise RequestError(HTTPStatus.NOT_FOUND, f"User {username} does not exist")
+        _, uid_max = cfg.read_uid_range()
+        if not config["min_uid"] <= pw.pw_uid <= uid_max:
+            raise RequestError(HTTPStatus.FORBIDDEN, f"{username} is a system account")
+
+        session = find_x_session(pw.pw_uid, pw.pw_dir)
+        if session is None:
+            raise RequestError(HTTPStatus.NOT_FOUND, f"{username} has no X11 session")
+        display, xauthority = session
+        argv = screenshot_argv(display)
+        if argv is None:
+            raise RequestError(HTTPStatus.SERVICE_UNAVAILABLE,
+                               "No screenshot tool found; install ImageMagick")
+
+        client = request.get("client")
+        logger.info(f"Web UI client {client if isinstance(client, str) else 'unknown'} "
+                    f"took a screenshot of {username} on {display}")
+        env = {"DISPLAY": display, "XAUTHORITY": xauthority, "HOME": pw.pw_dir,
+               "USER": username, "LOGNAME": username, "PATH": TOOL_PATH}
+        try:
+            result = subprocess.run(argv, user=pw.pw_uid, group=pw.pw_gid, extra_groups=[],
+                                    env=env, cwd="/", stdin=subprocess.DEVNULL,
+                                    capture_output=True, timeout=SCREENSHOT_TIMEOUT)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise RequestError(HTTPStatus.INTERNAL_SERVER_ERROR, f"Screenshot failed: {e}")
+        if result.returncode != 0 or not result.stdout.startswith(b"\x89PNG"):
+            detail = result.stderr.decode(errors="replace").strip()[-300:]
+            raise RequestError(HTTPStatus.BAD_GATEWAY,
+                               f"Screenshot failed: {detail or 'no image produced'}")
+        if len(result.stdout) > MAX_SCREENSHOT_BYTES:
+            raise RequestError(HTTPStatus.BAD_GATEWAY, "Screenshot is too large")
+        return {"user": username, "display": display,
+                "taken": datetime.now().isoformat(timespec="seconds"),
+                "png": base64.b64encode(result.stdout).decode()}
 
     def run_commands(self, request: dict) -> dict:
         """Run cmctl commands in order, stopping at the first that fails"""

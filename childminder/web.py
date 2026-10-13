@@ -229,6 +229,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         ("GET", "/api/config"): ("get_config", True),
         ("GET", "/api/logs"): ("get_logs", True),
         ("POST", "/api/commands"): ("post_commands", True),
+        ("POST", "/api/screenshot"): ("post_screenshot", True),
     }
 
     @property
@@ -359,6 +360,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def post_commands(self, body: dict) -> dict:
         return self.app.ask_broker({"op": "commands", "commands": body.get("commands"),
+                                    "client": self.client_address[0]})
+
+    def post_screenshot(self, body: dict) -> dict:
+        return self.app.ask_broker({"op": "screenshot", "user": body.get("user"),
                                     "client": self.client_address[0]})
 
     def get_logs(self, body) -> dict:

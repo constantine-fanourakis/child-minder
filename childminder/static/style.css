@@ -178,3 +178,12 @@ li.item form.inline { margin: 0; }
 .subsection { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 4px; }
 h3.user { color: var(--text); font-size: 1rem; }
 .day { margin-left: 4px; }
+
+.screenshot { margin-top: 10px; }
+.screenshot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
