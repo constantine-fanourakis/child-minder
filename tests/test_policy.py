@@ -76,6 +76,16 @@ class EvaluateTest(unittest.TestCase):
         self.usage = usage or policy.Usage()
         return policy.evaluate(processes, make_config(raw_config), self.usage, elapsed, WEEKDAY)
 
+    def test_raised_limit_warns_again(self):
+        usage = policy.Usage()
+        usage.charge_process("kid", "minecraft*", 58 * 60)
+        first = self.evaluate({"limited_processes": {"minecraft*": 60}}, [proc("minecraft")], usage)
+        self.assertEqual(len(first.warnings), 1)
+        again = self.evaluate({"limited_processes": {"minecraft*": 60}}, [proc("minecraft")], usage)
+        self.assertEqual(again.warnings, [])
+        raised = self.evaluate({"limited_processes": {"minecraft*": 61}}, [proc("minecraft")], usage)
+        self.assertEqual(len(raised.warnings), 1)
+
     def test_group_only_process_is_charged_to_its_group_alone(self):
         self.evaluate({"process_groups": {"media": ["mpv"]}}, [proc("mpv")])
         self.assertEqual(self.usage.groups, {"kid": {"media": 5}})

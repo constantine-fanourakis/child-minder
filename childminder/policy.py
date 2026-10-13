@@ -56,6 +56,8 @@ class Usage:
         self.processes = processes or {}
         self.groups = groups or {}
         self.daily = daily or {}
+        # Thresholds used, keyed by the limit as well as what it applies to, so
+        # a limit changed by a config reload starts with every warning unused
         self.warned: Dict[Hashable, Set[float]] = {}
 
     @classmethod
@@ -196,7 +198,7 @@ def evaluate(processes: List[Process], config: dict, usage: Usage,
         remaining = limit - usage.process_seconds(username, key)
         if remaining <= 0:
             over_keys.add((username, key))
-        elif usage.consume_warning(("process", username, key), remaining,
+        elif usage.consume_warning(("process", username, key, limit), remaining,
                                    intervals) is not None:
             actions.warnings.append(LimitWarning("process", username, app_names[(username, key)],
                                             key, remaining))
@@ -212,7 +214,7 @@ def evaluate(processes: List[Process], config: dict, usage: Usage,
         remaining = limit - usage.group_seconds(username, group)
         if remaining <= 0:
             over_groups.add((username, group))
-        elif usage.consume_warning(("group", username, group), remaining,
+        elif usage.consume_warning(("group", username, group, limit), remaining,
                                    intervals) is not None:
             actions.warnings.append(LimitWarning("group", username, group, group, remaining))
 
@@ -237,7 +239,8 @@ def evaluate(processes: List[Process], config: dict, usage: Usage,
         if remaining <= 0:
             actions.end_sessions.append(
                 (username, f"daily screen time limit reached ({limit / 60:.0f} minutes)"))
-        elif usage.consume_warning(("daily", username), remaining, intervals) is not None:
+        elif usage.consume_warning(("daily", username, limit), remaining,
+                                   intervals) is not None:
             actions.warnings.append(LimitWarning("daily", username, "", "", remaining))
 
     return actions
