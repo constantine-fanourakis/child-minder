@@ -5,7 +5,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from childminder import store
@@ -74,6 +74,13 @@ class DisableExpiredTest(unittest.TestCase):
         self.assertTrue(store.disable_expired({"re_enable_at": "2026-10-12T11:00:00"}, now))
         self.assertFalse(store.disable_expired({"re_enable_at": "2026-10-12T13:00:00"}, now))
         self.assertFalse(store.disable_expired({}, now))
+
+    def test_re_enable_time_with_an_offset_is_compared_as_local_time(self):
+        aware = datetime(2026, 10, 12, 11, tzinfo=timezone.utc)
+        local = aware.astimezone().replace(tzinfo=None)
+        record = {"re_enable_at": aware.isoformat()}
+        self.assertTrue(store.disable_expired(record, local + timedelta(seconds=1)))
+        self.assertFalse(store.disable_expired(record, local - timedelta(seconds=1)))
 
 
 class UserControlStoreTest(StoreTestCase):

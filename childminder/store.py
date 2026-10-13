@@ -106,10 +106,18 @@ def normalize_user_control(raw: dict, warn: Optional[Warn] = None) -> dict:
 
 
 def parse_time(value) -> Optional[datetime]:
+    """Parse an ISO timestamp as naive local time, which is what cmctl writes.
+
+    A timestamp with an offset is converted, so it compares with
+    datetime.now() instead of raising TypeError.
+    """
     try:
-        return datetime.fromisoformat(value)
+        moment = datetime.fromisoformat(value)
     except (TypeError, ValueError):
         return None
+    if moment.tzinfo is not None:
+        moment = moment.astimezone().replace(tzinfo=None)
+    return moment
 
 
 def disable_expired(record: dict, now: datetime) -> bool:
