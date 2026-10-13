@@ -143,6 +143,12 @@ def process_limit(config: dict, process_name: str) -> Tuple[Optional[str], Optio
     return None, None
 
 
+def process_limit_by_key(config: dict, key: str) -> Optional[float]:
+    """Return the limit in seconds of a usage key, if it is a limited_processes pattern"""
+    minutes = config["limited_processes"].get(key)
+    return None if minutes is None else minutes * 60
+
+
 def process_group(config: dict, process_name: str) -> Optional[str]:
     """Return the group of a process; one listed in several belongs to the first in config order"""
     for group, patterns in config["process_groups"].items():
@@ -161,6 +167,34 @@ def daily_limit(config: dict, username: str, now: datetime) -> Optional[float]:
     """Return a user's screen time limit in seconds for now's day type, if any"""
     minutes = cfg.user_daily_limit(config, username, now)
     return None if minutes is None else minutes * 60
+
+
+@dataclass
+class UsageLine:
+    username: str
+    subject: str                    # the config key or group; "" for daily screen time
+    seconds: float
+    limit_seconds: Optional[float]
+
+    @property
+    def remaining_seconds(self) -> Optional[float]:
+        if self.limit_seconds is None:
+            return None
+        return max(0.0, self.limit_seconds - self.seconds)
+
+
+def usage_report(usage: Usage, config: dict, now: datetime) -> Dict[str, List[UsageLine]]:
+    """Pair each usage counter with the limit it counts against, by kind"""
+    return {
+        "process": [UsageLine(user, key, seconds, process_limit_by_key(config, key))
+                    for user, keys in usage.processes.items()
+                    for key, seconds in keys.items()],
+        "group": [UsageLine(user, group, seconds, group_limit(config, group))
+                  for user, groups in usage.groups.items()
+                  for group, seconds in groups.items()],
+        "daily": [UsageLine(user, "", seconds, daily_limit(config, user, now))
+                  for user, seconds in usage.daily.items()],
+    }
 
 
 def evaluate(processes: List[Process], config: dict, usage: Usage,

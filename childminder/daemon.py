@@ -663,36 +663,24 @@ class ChildMinder:
             return
 
         self.logger.info("=== Usage Summary ===")
-        now = datetime.now()
+        report = policy.usage_report(self.usage, self.config, datetime.now())
 
-        def remaining(limit_seconds: Optional[float], seconds: float) -> str:
-            if limit_seconds is None:
-                return ""
-            return f" (Remaining: {max(0, (limit_seconds - seconds) / 60):.0f} minutes)"
+        def describe(line: policy.UsageLine) -> str:
+            text = f"Time: {line.seconds / 60:.1f} minutes"
+            if line.remaining_seconds is not None:
+                text += f" (Remaining: {line.remaining_seconds / 60:.0f} minutes)"
+            return text
 
-        if self.usage.processes:
-            self.logger.info("Individual Process Usage:")
-            for user, keys in self.usage.processes.items():
-                for key, seconds in keys.items():
-                    minutes = self.config["limited_processes"].get(key)
-                    limit = None if minutes is None else minutes * 60
-                    self.logger.info(f"  User: {user}, Process: {key}, "
-                                     f"Time: {seconds / 60:.1f} minutes{remaining(limit, seconds)}")
-
-        if self.usage.groups:
-            self.logger.info("Group Usage:")
-            for user, groups in self.usage.groups.items():
-                for group, seconds in groups.items():
-                    limit = policy.group_limit(self.config, group)
-                    self.logger.info(f"  User: {user}, Group: {group}, "
-                                     f"Time: {seconds / 60:.1f} minutes{remaining(limit, seconds)}")
-
-        if self.usage.daily:
-            self.logger.info("User Daily Screen Time:")
-            for user, seconds in self.usage.daily.items():
-                limit = policy.daily_limit(self.config, user, now)
-                self.logger.info(f"  User: {user}, "
-                                 f"Time: {seconds / 60:.1f} minutes{remaining(limit, seconds)}")
+        headings = {"process": ("Individual Process Usage:", "Process: "),
+                    "group": ("Group Usage:", "Group: "),
+                    "daily": ("User Daily Screen Time:", "")}
+        for kind, (heading, label) in headings.items():
+            if not report[kind]:
+                continue
+            self.logger.info(heading)
+            for line in report[kind]:
+                subject = f"{label}{line.subject}, " if label else ""
+                self.logger.info(f"  User: {line.username}, {subject}{describe(line)}")
 
         self.logger.info("===================")
 

@@ -80,6 +80,22 @@ class UsageStateTest(unittest.TestCase):
         self.assertEqual(len(warnings), 1)
 
 
+class UsageReportTest(unittest.TestCase):
+    def test_counters_are_paired_with_their_limits(self):
+        usage = policy.Usage({"kid": {"minecraft*": 600, "code": 60}}, {"kid": {"games": 7300}},
+                             {"kid": 3000})
+        config = make_config({"limited_processes": {"minecraft*": 60},
+                              "process_groups": {"games": ["steam*"]},
+                              "group_limits": {"games": 120},
+                              "user_daily_limits": {"kid": {"weekday": 120, "weekend": 240}}})
+        report = policy.usage_report(usage, config, WEEKDAY)
+        self.assertEqual([(l.subject, l.limit_seconds, l.remaining_seconds)
+                          for l in report["process"]],
+                         [("minecraft*", 3600, 3000), ("code", None, None)])
+        self.assertEqual(report["group"][0].remaining_seconds, 0)
+        self.assertEqual(report["daily"][0].limit_seconds, 7200)
+
+
 class EvaluateTest(unittest.TestCase):
     def evaluate(self, raw_config, processes, usage=None, elapsed=5.0):
         self.usage = usage or policy.Usage()

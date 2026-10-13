@@ -3,7 +3,6 @@ Child Minder Management Utility (cmctl)
 Provides easy management and reporting for the Child Minder system
 """
 
-import json
 import sys
 import argparse
 from contextlib import contextmanager
@@ -16,6 +15,7 @@ import pwd
 
 from childminder import accounts
 from childminder import config as cfg
+from childminder import policy
 from childminder import schedule
 from childminder import store
 from childminder.store import atomic_write_json
@@ -89,25 +89,19 @@ class ChildMinderManager:
             sys.exit(1)
             
     def load_state(self) -> dict:
-        """Load current state"""
+        """Load the daemon's saved state, empty if there is none.
+
+        As root an unreadable file is reported and treated as empty, as the
+        daemon does; anyone else is most likely just not allowed to read it.
+        """
         try:
-            with open(self.state_path, 'r') as f:
-                state = json.load(f)
-                # Ensure group_usage exists for backward compatibility
-                if 'group_usage' not in state:
-                    state['group_usage'] = {}
-                if 'user_daily_usage' not in state:
-                    state['user_daily_usage'] = {}
-                return state
-        except FileNotFoundError:
-            pass
-        except PermissionError:
-            print(f"Error: Permission denied reading {self.state_path} (try: sudo cmctl ...)")
-            sys.exit(1)
-        except Exception as e:
+            state = store.read_json(self.state_path)
+        except store.StoreError as e:
+            if os.geteuid() != 0:
+                _exit_unreadable(e)
             print(f"Warning: Could not load state: {e}")
-        return {"daily_usage": {}, "group_usage": {}, "user_daily_usage": {},
-                "last_reset": datetime.now().isoformat()}
+            state = None
+        return state or {"last_reset": datetime.now().isoformat()}
         
     def add_blocked_process(self, process_name: str):
         """Add a process to the block list"""
@@ -318,65 +312,40 @@ class ChildMinderManager:
         config = self.effective_config()
         print("\n=== Daily Usage Statistics ===")
         print(f"Last reset: {state.get('last_reset', 'Unknown')}")
-        
-        # Show individual process usage
-        daily_usage = state.get('daily_usage', {})
-        if daily_usage:
-            print("\nIndividual Process Usage:")
-            for user, processes in daily_usage.items():
-                print(f"\nUser: {user}")
-                for process, seconds in processes.items():
-                    minutes = seconds / 60
-                    hours = minutes / 60
-                    if hours >= 1:
-                        print(f"  - {process}: {hours:.1f} hours")
-                    else:
-                        print(f"  - {process}: {minutes:.0f} minutes")
-                    
-                    # Check if limited
-                    limit = config['limited_processes'].get(process)
-                    if limit is not None:
-                        remaining = max(0, limit - minutes)
-                        print(f"      (Limit: {limit} min, Remaining: {remaining:.0f} min)")
-        
-        # Show group usage
-        group_usage = state.get('group_usage', {})
-        if group_usage:
-            print("\nGroup Usage:")
-            for user, groups in group_usage.items():
-                print(f"\nUser: {user}")
-                for group, seconds in groups.items():
-                    minutes = seconds / 60
-                    hours = minutes / 60
-                    if hours >= 1:
-                        print(f"  - Group '{group}': {hours:.1f} hours")
-                    else:
-                        print(f"  - Group '{group}': {minutes:.0f} minutes")
-                    
-                    # Check if limited
-                    limit = config['group_limits'].get(group)
-                    if limit is not None:
-                        remaining = max(0, limit - minutes)
-                        print(f"      (Limit: {limit} min, Remaining: {remaining:.0f} min)")
-        
-        # Show user daily screen time
-        user_daily_usage = state.get('user_daily_usage', {})
-        if user_daily_usage:
-            print("\nUser Daily Screen Time:")
-            now = datetime.now()
-            for user, seconds in user_daily_usage.items():
-                minutes = seconds / 60
-                if minutes >= 60:
-                    print(f"  {user}: {minutes/60:.1f} hours")
-                else:
-                    print(f"  {user}: {minutes:.0f} minutes")
-                limit = cfg.user_daily_limit(config, user, now)
-                if limit is not None:
-                    remaining = max(0, limit - minutes)
-                    print(f"    ({cfg.day_type(now)} limit: {limit} min, "
-                          f"Remaining: {remaining:.0f} min)")
 
-        if not daily_usage and not group_usage and not user_daily_usage:
+        now = datetime.now()
+        report = policy.usage_report(policy.Usage.from_state(state, _print_warning), config, now)
+
+        def amount(seconds: float) -> str:
+            minutes = seconds / 60
+            return f"{minutes / 60:.1f} hours" if minutes >= 60 else f"{minutes:.0f} minutes"
+
+        def limit_text(line: policy.UsageLine) -> str:
+            return (f"{line.limit_seconds / 60:g} min, "
+                    f"Remaining: {line.remaining_seconds / 60:.0f} min")
+
+        for kind, heading in (("process", "Individual Process Usage:"), ("group", "Group Usage:")):
+            if not report[kind]:
+                continue
+            print(f"\n{heading}")
+            user = None
+            for line in report[kind]:
+                if line.username != user:
+                    user = line.username
+                    print(f"\nUser: {user}")
+                name = line.subject if kind == "process" else f"Group '{line.subject}'"
+                print(f"  - {name}: {amount(line.seconds)}")
+                if line.limit_seconds is not None:
+                    print(f"      (Limit: {limit_text(line)})")
+
+        if report["daily"]:
+            print("\nUser Daily Screen Time:")
+            for line in report["daily"]:
+                print(f"  {line.username}: {amount(line.seconds)}")
+                if line.limit_seconds is not None:
+                    print(f"    ({cfg.day_type(now)} limit: {limit_text(line)})")
+
+        if not any(report.values()):
             print("No usage data available")
                     
     def reset_usage(self):
@@ -400,9 +369,7 @@ class ChildMinderManager:
             return
 
         state = self.load_state()
-        state['daily_usage'] = {}
-        state['group_usage'] = {}
-        state['user_daily_usage'] = {}
+        state.update(policy.Usage().to_state())
         state['last_reset'] = datetime.now().isoformat()
         try:
             atomic_write_json(self.state_path, state)
