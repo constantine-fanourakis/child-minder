@@ -193,6 +193,12 @@ class ConfigCommandTest(CmctlTestCase):
         self.run_cmctl("user-unlimit", "kid")
         self.assertEqual(self.read_json(self.config_path)["user_daily_limits"], {})
 
+    def test_config_shows_who_is_monitored(self):
+        for users, text in ((["*"], "All regular users"), ([], "None"),
+                            (["kid", "sam"], "kid, sam")):
+            self.write_config({"monitored_users": users})
+            self.assertIn(f"Monitored Users: {text}", self.run_cmctl("config"))
+
     def test_monitored_users(self):
         self.run_cmctl("add-user", "kid")
         self.assertEqual(self.read_json(self.config_path)["monitored_users"], ["kid"])

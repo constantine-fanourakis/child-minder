@@ -83,19 +83,23 @@ class ConfigTest(MinderTestCase):
 
 class UserSelectionTest(MinderTestCase):
     def test_system_accounts_are_never_monitored(self):
-        minder = self.make_minder({"monitored_users": []})
+        minder = self.make_minder({"monitored_users": ["*"]})
         self.assertFalse(minder.should_monitor_user("root", 0))
         self.assertFalse(minder.should_monitor_user("daemon", 999))
 
     def test_accounts_above_uid_max_are_never_monitored(self):
-        minder = self.make_minder({"monitored_users": []})
+        minder = self.make_minder({"monitored_users": ["*"]})
         self.assertFalse(minder.should_monitor_user("nobody", 65534))
         self.assertFalse(minder.should_monitor_user("dynamic", 61184))
         self.assertTrue(minder.should_monitor_user("kid", minder.uid_max))
 
-    def test_empty_list_monitors_every_human_user(self):
-        minder = self.make_minder({"monitored_users": []})
+    def test_star_monitors_every_human_user(self):
+        minder = self.make_minder({"monitored_users": ["*"]})
         self.assertTrue(minder.should_monitor_user("kid", KID_UID))
+
+    def test_empty_list_monitors_nobody(self):
+        minder = self.make_minder({"monitored_users": []})
+        self.assertFalse(minder.should_monitor_user("kid", KID_UID))
 
     def test_listed_users_only(self):
         minder = self.make_minder({"monitored_users": ["kid"]})
@@ -685,7 +689,7 @@ class UserControlTest(MinderTestCase):
         ended.assert_called_once_with("kid", "outside allowed access hours")
 
     def test_schedule_applies_when_every_user_is_monitored(self):
-        ended = self.enforce_schedule_at(WEEKDAY.replace(hour=9), [])
+        ended = self.enforce_schedule_at(WEEKDAY.replace(hour=9), ["*"])
         ended.assert_called_once_with("kid", "outside allowed access hours")
 
     def test_schedule_ignored_for_unmonitored_user(self):
@@ -693,7 +697,7 @@ class UserControlTest(MinderTestCase):
         ended.assert_not_called()
 
     def test_user_inside_hours_keeps_session(self):
-        ended = self.enforce_schedule_at(WEEKDAY.replace(hour=16), [])
+        ended = self.enforce_schedule_at(WEEKDAY.replace(hour=16), ["*"])
         ended.assert_not_called()
 
     def test_schedule_for_unknown_account_is_skipped(self):

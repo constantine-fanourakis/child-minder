@@ -83,7 +83,8 @@ Configuration lives at `/etc/child-minder/config.json`. Changes are picked up on
 | `enabled` | bool | `true` | Master on/off switch |
 | `check_interval` | int | `5` | Seconds between process checks |
 | `min_uid` | int | `1000` | Lowest UID that may be monitored; a value below `UID_MIN` in `/etc/login.defs` is replaced by `UID_MIN`, so system accounts are never touched |
-| `monitored_users` | list | `[]` | Usernames to monitor (empty = all users from `min_uid` up to `UID_MAX` in `/etc/login.defs`) |
+| `monitored_users` | list | `[]` | Usernames to monitor. `"*"` monitors every user from `min_uid` up to `UID_MAX` in `/etc/login.defs`; an empty list monitors nobody |
+| `config_version` | int | | Format of the file, set by the installer; leave it as it is |
 | `blocked_processes` | list | `[]` | Process patterns to block completely |
 | `limited_processes` | dict | `{}` | Process pattern → daily limit in minutes |
 | `process_groups` | dict | `{}` | Group name → list of process patterns |
@@ -282,6 +283,11 @@ too, and removing a user's last window for a day type returns that day to
 unrestricted rather than locking them out. To bar a whole day type, deny it
 explicitly with `deny-weekday-access` or `deny-weekend-access`.
 
+**Upgrading from a release without `config_version` 2:** those releases read
+an empty or missing `monitored_users` as every regular user. It now means
+nobody, so the installer replaces it with `["*"]` once, which keeps the same
+users monitored, and records `"config_version": 2`.
+
 **Upgrading from a release without `deny-*-access`:** those releases treated a
 day type with no windows as no access, and `remove-*-window` warned "user will
 have no weekend access" when the last window went. Such a day type is now
@@ -448,8 +454,8 @@ the address of the device that sent it:
 sudo journalctl -u 'child-minder-broker@*' --since today
 ```
 
-Locking, unlocking and screenshots work only for monitored users. When
-`monitored_users` is empty, that means every regular user.
+Locking, unlocking and screenshots work only for monitored users. With `"*"`
+in `monitored_users`, that is every regular user.
 
 ### Security
 

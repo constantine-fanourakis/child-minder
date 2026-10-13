@@ -69,10 +69,11 @@ class MinderTestCase(unittest.TestCase):
         File logging is replaced by the module logger alone, so assertLogs sees
         every record and no handler is left open between tests.
         """
+        # Every regular account is monitored unless a test names the users
         if config is not None:
-            self.write_config(config)
+            self.write_config({"monitored_users": [cfg.ALL_USERS], **config})
         elif not self.config_path.exists():
-            self.write_config({})
+            self.write_config({"monitored_users": [cfg.ALL_USERS]})
 
         handlers = {s: signal.getsignal(s)
                     for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGUSR1)}

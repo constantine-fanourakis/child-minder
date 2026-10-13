@@ -271,8 +271,8 @@ class OverviewTest(WebTestCase):
         names = [u["name"] for u in self.overview()["users"]]
         self.assertEqual(names, ["kid", "other"])
 
-    def test_empty_monitored_users_lists_regular_accounts(self):
-        self.write(self.config_path, {"monitored_users": []})
+    def test_star_lists_regular_accounts(self):
+        self.write(self.config_path, {"monitored_users": ["*"]})
         accounts = [mock.Mock(pw_name=name, pw_uid=uid)
                     for name, uid in (("root", 0), ("kid", 1001), ("nobody", 65534))]
         with mock.patch.object(broker.pwd, "getpwall", return_value=accounts):
@@ -526,8 +526,10 @@ class CommandTest(WebTestCase):
         self.assertEqual(self.ran(), [])
 
     def test_account_commands_follow_the_validated_monitored_users(self):
-        self.write(self.config_path, {"monitored_users": []})
+        self.write(self.config_path, {"monitored_users": ["*"]})
         self.assertEqual(self.post({"command": "enable-user", "args": ["parent"]})[0], 200)
+        self.write(self.config_path, {"monitored_users": []})
+        self.assertEqual(self.post({"command": "disable-user", "args": ["kid"]})[0], 403)
         self.write(self.config_path, {"monitored_users": "kid"})
         self.assertEqual(self.post({"command": "enable-user", "args": ["kid"]})[0], 403)
 

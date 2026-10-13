@@ -161,6 +161,32 @@ else
     echo "Existing configuration preserved."
     echo "New default config saved as /etc/child-minder/config.json.new for reference."
 
+    # config.upgrade() rewrites what older releases meant by a setting, once:
+    # an empty monitored_users used to mean every regular account. The
+    # last-good copy is upgraded too, since the daemon may start from it.
+    PYTHONPATH="$LIB_DIR" "$PYTHON" - /etc/child-minder/config.json \
+            /var/lib/child-minder/config.last-good.json <<'EOF' || true
+import json, sys
+from childminder import config
+from childminder.store import atomic_write_json
+for path in sys.argv[1:]:
+    try:
+        with open(path) as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        continue
+    if not isinstance(raw, dict):
+        continue
+    was_empty = raw.get("monitored_users", []) == []
+    if config.upgrade(raw):
+        atomic_write_json(path, raw)
+        if was_empty and path.endswith("/config.json"):
+            print("")
+            print("monitored_users was empty, which used to mean every regular user.")
+            print('It now means nobody, so it was set to ["*"], which keeps monitoring')
+            print("every regular user. Replace * with names to monitor only them.")
+EOF
+
     # A pattern without a glob character matches only a process name equal to
     # the whole pattern, so list those in case one was meant as a prefix.
     "$PYTHON" - /etc/child-minder/config.json <<'EOF' || true

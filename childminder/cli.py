@@ -347,9 +347,9 @@ class ChildMinderManager:
         print("\n=== Current Configuration ===")
         print(f"Enabled: {config.get('enabled', True)}")
         print(f"Check Interval: {config.get('check_interval', 5)} seconds")
-        users = config.get('monitored_users', [])
-        users_text = ("None (invalid monitored_users)" if users is None
-                      else ', '.join(users) or 'All users')
+        users = config['monitored_users']
+        users_text = ("All regular users" if cfg.ALL_USERS in users
+                      else ', '.join(users) or 'None')
         print(f"\nMonitored Users: {users_text}")
         
         print(f"\nBlocked Processes:")

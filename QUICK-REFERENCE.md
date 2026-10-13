@@ -101,6 +101,7 @@ sudo cmctl group-unlimit games
 # Add/remove monitored users
 sudo cmctl add-user johnny
 sudo cmctl remove-user johnny
+sudo cmctl add-user '*'          # Every regular user; an empty list monitors nobody
 
 # Disable user account (immediate logout)
 sudo cmctl disable-user johnny -r "Not doing homework"
@@ -251,7 +252,7 @@ sudo apt install libnotify-bin
 ps aux | grep -i appname
 
 # Check if user is monitored
-sudo cmctl config | grep monitored_users
+sudo cmctl config | grep "Monitored Users"
 
 # Check logs for errors
 sudo cmctl logs -n 100

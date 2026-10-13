@@ -78,13 +78,10 @@ class ValidateTest(unittest.TestCase):
         self.assertEqual(config["user_control"]["check_interval"], 60)
 
     def test_unusable_monitored_users_monitors_nobody(self):
-        # [] means "every regular user", so a bad value must not fall back to it
         for bad in ("kid", 7, None, [7], ["kid", 7]):
             config, warnings = validate({"monitored_users": bad})
-            if bad == ["kid", 7]:
-                self.assertEqual(config["monitored_users"], ["kid"])
-            else:
-                self.assertIsNone(config["monitored_users"], bad)
+            expected = ["kid"] if bad == ["kid", 7] else []
+            self.assertEqual(config["monitored_users"], expected, bad)
             self.assertTrue(warnings, bad)
         config, warnings = validate({"monitored_users": []})
         self.assertEqual(config["monitored_users"], [])
@@ -189,8 +186,35 @@ class AccountScopeTest(unittest.TestCase):
         self.assertTrue(cfg.monitors(config, "kid"))
         self.assertFalse(cfg.monitors(config, "parent"))
 
-    def test_empty_list_monitors_everyone_and_invalid_monitors_nobody(self):
-        config, _ = validate({"monitored_users": []})
+    def test_star_monitors_everyone_and_empty_or_invalid_nobody(self):
+        config, _ = validate({"monitored_users": ["*"]})
         self.assertTrue(cfg.monitors(config, "parent"))
-        config, _ = validate({"monitored_users": "kid"})
+        for users in ([], "kid"):
+            config, _ = validate({"monitored_users": users})
+            self.assertFalse(cfg.monitors(config, "kid"), users)
+        config, _ = validate({})
         self.assertFalse(cfg.monitors(config, "kid"))
+
+
+class UpgradeTest(unittest.TestCase):
+    def test_empty_or_missing_list_from_before_version_2_becomes_everyone(self):
+        for raw in ({"monitored_users": []}, {}):
+            self.assertTrue(cfg.upgrade(raw))
+            self.assertEqual(raw["monitored_users"], ["*"])
+            self.assertEqual(raw["config_version"], cfg.CONFIG_VERSION)
+
+    def test_named_users_are_kept(self):
+        raw = {"monitored_users": ["kid"], "blocked_processes": ["x"]}
+        self.assertTrue(cfg.upgrade(raw))
+        self.assertEqual(raw, {"monitored_users": ["kid"], "blocked_processes": ["x"],
+                               "config_version": cfg.CONFIG_VERSION})
+
+    def test_current_version_is_left_alone(self):
+        raw = {"monitored_users": [], "config_version": cfg.CONFIG_VERSION}
+        self.assertFalse(cfg.upgrade(raw))
+        self.assertEqual(raw["monitored_users"], [])
+
+    def test_repo_default_config_is_current(self):
+        import json
+        with open(os.path.join(os.path.dirname(__file__), "..", "config.json")) as f:
+            self.assertFalse(cfg.upgrade(json.load(f)))

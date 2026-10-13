@@ -290,15 +290,15 @@ function textInput(placeholder) {
 
 function monitoredUsersSection(c) {
   const name = textInput("Username");
-  const note = c.monitored_users === null
-    ? el("p", { class: "notice" }, "monitored_users is invalid, so nobody is monitored.")
-    : c.monitored_users.length === 0
-      ? el("p", { class: "muted" }, "Empty: every regular user is monitored.")
-      : null;
+  const note = c.monitored_users.length === 0
+    ? el("p", { class: "notice" }, "Nobody is monitored.")
+    : el("p", { class: "muted" }, "Add * to monitor every regular user.");
   return section("Monitored users", note,
-    el("ul", { class: "plain" }, (c.monitored_users || []).map((user) =>
-      itemRow(user, button("Remove", () => run([cmd("remove-user", user)],
-        `Stop monitoring ${user}?`), "danger")))),
+    el("ul", { class: "plain" }, c.monitored_users.map((user) =>
+      itemRow(user === "*" ? "* (every regular user)" : user,
+        button("Remove", () => run([cmd("remove-user", user)],
+          user === "*" ? "Stop monitoring every regular user?" : `Stop monitoring ${user}?`),
+          "danger")))),
     inlineForm([name], "Add", () => run([cmd("add-user", name.value.trim())])));
 }
 

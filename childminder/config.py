@@ -3,9 +3,12 @@
 validate() is the single definition of a usable configuration. It returns a
 canonical copy: every key present, every entry of the right type, and
 user_daily_limits entries always in {"weekday": m, "weekend": m} form, where
-either value may be None. A limit of 0 minutes means no time allowed. The one
-exception to "right type" is monitored_users: an unusable value becomes None
-(monitors nobody), because its [] default means every regular user.
+either value may be None. A limit of 0 minutes means no time allowed.
+
+monitored_users lists the accounts to monitor; ALL_USERS in it means every
+regular account, and an empty list monitors nobody. Configs written before
+config_version 2 used an empty list for every regular account, which
+upgrade() rewrites.
 """
 
 import copy
@@ -31,6 +34,10 @@ Warn = Callable[[str], None]
 
 class ConfigError(Exception):
     """Raised when a configuration file cannot be read or parsed"""
+
+
+ALL_USERS = "*"
+CONFIG_VERSION = 2
 
 
 def defaults() -> dict:
@@ -116,24 +123,14 @@ def validate(raw: dict, warn: Warn, uid_min: int) -> dict:
     base = defaults()
 
     for key, default_value in base.items():
-        if key == 'monitored_users':
-            continue  # handled below: its default means "every user"
         if not _same_kind(config.setdefault(key, default_value), default_value):
             warn(f"Invalid '{key}', using default")
             config[key] = default_value
 
-    # An empty monitored_users list deliberately means "every regular user",
-    # so an unusable value must not fall back to it: that would widen a typo
-    # to accounts the administrator never named. None monitors nobody.
-    raw_users = raw.get('monitored_users', [])
-    if isinstance(raw_users, list):
-        users = [u for u in raw_users if isinstance(u, str)]
-        if len(users) != len(raw_users):
-            warn("Ignoring non-string entries in 'monitored_users'")
-        config['monitored_users'] = users if users or not raw_users else None
-    else:
-        warn("Invalid 'monitored_users', monitoring no users")
-        config['monitored_users'] = None
+    users = [u for u in config['monitored_users'] if isinstance(u, str)]
+    if len(users) != len(config['monitored_users']):
+        warn("Ignoring non-string entries in 'monitored_users'")
+        config['monitored_users'] = users
 
     if config['check_interval'] <= 0:
         warn("Invalid check_interval, using default: 5")
@@ -249,9 +246,23 @@ def monitors(config: dict, username: str) -> bool:
     This decides only by name; is_regular_uid must also hold.
     """
     users = config["monitored_users"]
-    if users is None:  # An invalid value monitors nobody
+    return ALL_USERS in users or username in users
+
+
+def upgrade(raw: dict) -> bool:
+    """Bring a config file's contents to CONFIG_VERSION, returning whether it changed.
+
+    Before version 2 an empty or missing monitored_users meant every regular
+    account; it now means nobody, so it becomes [ALL_USERS]. The version is
+    recorded, so a later empty list keeps its meaning.
+    """
+    version = raw.get("config_version", 1)
+    if is_number(version) and version >= CONFIG_VERSION:
         return False
-    return not users or username in users  # Empty means every regular account
+    if raw.get("monitored_users", []) == []:
+        raw["monitored_users"] = [ALL_USERS]
+    raw["config_version"] = CONFIG_VERSION
+    return True
 
 
 def day_type(moment: datetime) -> str:

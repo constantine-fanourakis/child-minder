@@ -248,14 +248,12 @@ class Broker:
     def user_names(self, config: dict, usage: policy.Usage, user_control: dict) -> list:
         """Users to show: the monitored ones, plus any with usage, limits or records"""
         monitored = config["monitored_users"]
-        if monitored is None:
-            names = []
-        elif monitored:
-            names = list(monitored)
-        else:
+        if cfg.ALL_USERS in monitored:
             _, uid_max = cfg.read_uid_range()
             names = sorted(p.pw_name for p in pwd.getpwall()
                            if cfg.is_regular_uid(config, p.pw_uid, uid_max))
+        else:
+            names = list(monitored)
         for extra in (usage.daily, usage.processes, usage.groups,
                       user_control["disabled_users"], user_control["daily_schedules"],
                       config["user_daily_limits"]):

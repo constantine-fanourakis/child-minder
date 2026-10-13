@@ -90,6 +90,18 @@ if [ -n "${FROM_REV:-}" ]; then
     check "install $FROM_REV" test $? -eq 0
     cmctl add-user kid >/dev/null 2>&1
     cmctl set-weekday-hours kid 0 23 >/dev/null 2>&1
+    OLD_VERSION=$(python3 -c "import json; print(json.load(open('$CONFIG')).get('config_version', 1))")
+    if [ "$OLD_VERSION" = 1 ]; then
+        # Before config_version 2 an empty list meant every regular user
+        python3 - "$CONFIG" <<'EOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    config = json.load(f)
+config["monitored_users"] = []
+with open(sys.argv[1], "w") as f:
+    json.dump(config, f)
+EOF
+    fi
     systemctl start child-minder
 fi
 
@@ -107,6 +119,12 @@ if [ -n "${FROM_REV:-}" ]; then
     # under "(all days)" rather than "Weekday (Mon-Fri)"
     check "schedule written by $FROM_REV is readable" \
         bash -c 'cmctl user-status kid | grep -q "00:00 - 23:00"'
+    if [ "$OLD_VERSION" = 1 ]; then
+        check "empty monitored_users from $FROM_REV still monitors everyone" \
+            python3 -c "import json, sys; c = json.load(open('$CONFIG')); sys.exit(not (c['monitored_users'] == ['*'] and c['config_version'] == 2))"
+        check "installer explains the monitored_users change" \
+            grep -q 'it was set to \["\*"\]' /tmp/install.log
+    fi
     cmctl clear-user-hours kid >/dev/null
 fi
 
