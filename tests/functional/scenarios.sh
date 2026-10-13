@@ -96,6 +96,8 @@ fi
 (cd /root/new && bash install.sh >/tmp/install.log 2>&1)
 check "install.sh succeeds" test $? -eq 0
 check "service is running after install" wait_for 10 service_active
+check "web UI port is open in firewalld" \
+    firewall-cmd --zone="$(firewall-cmd --get-default-zone)" --query-port=8765/tcp
 check "package installed under /usr/lib/child-minder" \
     test -f /usr/lib/child-minder/childminder/daemon.py
 check "cmctl is a symlink into /usr/lib" \
@@ -299,6 +301,8 @@ check "service is gone" bash -c '! systemctl cat child-minder'
 check "files are removed" bash -c 'test ! -e /usr/lib/child-minder && test ! -e /usr/bin/cmctl && test ! -e /usr/bin/cmctl.py'
 check "web UI units are gone" bash -c '! systemctl cat child-minder-web && ! systemctl cat child-minder-broker.socket'
 check "web UI user is removed" bash -c '! getent passwd child-minder-web'
+check "web UI port is closed in firewalld" \
+    bash -c '! firewall-cmd --permanent --zone="$(firewall-cmd --get-default-zone)" --query-port=8765/tcp'
 
 echo ""
 echo "${PASSED} passed, ${#FAILURES[@]} failed"

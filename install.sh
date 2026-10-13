@@ -241,8 +241,24 @@ if ! "$PYTHON" -c 'import json, sys; sys.exit("password" not in json.load(open("
     echo "  Set its password first: sudo cmctl web-password"
 fi
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-    echo "  To reach it from other devices, open the port in firewalld:"
-    echo "    sudo firewall-cmd --permanent --add-port=${WEB_PORT}/tcp && sudo firewall-cmd --reload"
+    # A Wi-Fi interface is often in a zone other than the default one, so the
+    # port is opened in every active zone. Each line of --get-active-zones that
+    # starts a zone begins with its name; firewalld 2 may append " (default)".
+    ZONES=$(firewall-cmd --get-active-zones | awk '/^[^[:space:]]/ {print $1}')
+    [ -n "$ZONES" ] || ZONES=$(firewall-cmd --get-default-zone)
+    OPENED=""
+    for zone in $ZONES; do
+        if firewall-cmd --permanent --zone="$zone" --add-port="${WEB_PORT}/tcp" >/dev/null; then
+            OPENED="$OPENED $zone"
+        fi
+    done
+    if [ -n "$OPENED" ] && firewall-cmd --reload >/dev/null; then
+        echo "  Opened TCP port ${WEB_PORT} in firewalld zone(s):${OPENED}"
+    else
+        echo "  Warning: could not open TCP port ${WEB_PORT} in firewalld"
+    fi
+else
+    echo "  firewalld is not running; if another firewall is active, allow TCP port ${WEB_PORT}."
 fi
 
 if $IS_UPDATE; then

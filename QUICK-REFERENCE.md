@@ -37,8 +37,8 @@ sudo cmctl web-password                     # Set the password first
 # Then browse to http://<computer's address>:8765/
 sudo systemctl status child-minder-web      # Web UI status
 sudo journalctl -u 'child-minder-broker@*'  # Changes made from the web UI
-# openSUSE firewall:
-sudo firewall-cmd --permanent --add-port=8765/tcp && sudo firewall-cmd --reload
+# install.sh opens the port in firewalld; check it with:
+sudo firewall-cmd --list-ports --zone="$(firewall-cmd --get-default-zone)"
 ```
 
 ## Configuration Management (`cmctl`)
