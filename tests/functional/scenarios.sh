@@ -69,6 +69,18 @@ end_kid_processes() {
 
 today_type() { [ "$(date +%u)" -le 5 ] && echo weekday || echo weekend; }
 
+WEB=http://127.0.0.1:8765
+CSRF=""
+# web METHOD PATH [JSON]: send a web UI request with the session cookie,
+# leaving the body in /tmp/web.out and printing the HTTP status
+web() {
+    curl -s -o /tmp/web.out -w '%{http_code}' -b /tmp/web.jar -c /tmp/web.jar \
+        -H 'Content-Type: application/json' -H "X-CSRF-Token: $CSRF" \
+        -X "$1" ${3:+-d "$3"} "$WEB$2"
+}
+web_field() { python3 -c "import json; print(json.load(open('/tmp/web.out'))$1)"; }
+web_up() { curl -s -o /dev/null "$WEB/"; }
+
 useradd -m -u 1001 kid
 echo kid:password | chpasswd
 
@@ -91,8 +103,10 @@ check "cmctl is a symlink into /usr/lib" \
 check "no daemon left in /usr/bin" test ! -e /usr/bin/child-minder.py
 if [ -n "${FROM_REV:-}" ]; then
     check "update path taken" grep -q "performing update" /tmp/install.log
+    # Some releases also copy the window to an empty weekend, which shows it
+    # under "(all days)" rather than "Weekday (Mon-Fri)"
     check "schedule written by $FROM_REV is readable" \
-        bash -c 'cmctl user-status kid | grep -q "Weekday (Mon-Fri): 00:00 - 23:00"'
+        bash -c 'cmctl user-status kid | grep -q "00:00 - 23:00"'
     cmctl clear-user-hours kid >/dev/null
 fi
 
@@ -225,6 +239,57 @@ check "service running on fallback config" service_active
 cp /root/config.good "$CONFIG"
 check "config reload" reload_and_wait
 
+echo "== Web UI"
+check "web UI is running" wait_for 15 web_up
+check "broker socket is listening" systemctl is-active --quiet child-minder-broker.socket
+WEB_PID=$(systemctl show -p MainPID --value child-minder-web)
+check "web UI runs as child-minder-web" \
+    test "$(ps -o uid= -p "$WEB_PID" | tr -d ' ')" = "$(id -u child-minder-web)"
+check "web UI has no capabilities" \
+    bash -c "grep -q '^CapEff:[[:space:]]*0*$' /proc/$WEB_PID/status"
+check "login is refused before a password is set" \
+    test "$(web POST /api/login '{"password":"x"}')" = 503
+echo secret | cmctl web-password >/dev/null
+check "web.json is readable by the web UI group only" \
+    test "$(stat -c '%a %G' /etc/child-minder/web.json)" = "640 child-minder-web"
+check "wrong password is refused" test "$(web POST /api/login '{"password":"x"}')" = 401
+check "login succeeds" test "$(web POST /api/login '{"password":"secret"}')" = 200
+CSRF=$(web_field '["csrf"]')
+check "overview lists the monitored user" \
+    bash -c "[ \"\$(curl -s -b /tmp/web.jar $WEB/api/overview | python3 -c 'import json,sys; print([u[\"name\"] for u in json.load(sys.stdin)[\"users\"]])')\" = \"['kid']\" ]"
+check "change without the CSRF token is refused" \
+    test "$(CSRF=wrong web POST /api/commands '{"commands":[{"command":"block","args":["webapp"]}]}')" = 403
+check "block through the web UI" \
+    test "$(web POST /api/commands '{"commands":[{"command":"block","args":["webapp"]}]}')" = 200
+check "block reached config.json" grep -q '"webapp"' "$CONFIG"
+check "failing command is reported" \
+    test "$(web POST /api/commands '{"commands":[{"command":"unblock","args":["nothing"]}]}')" = 422
+check "lock of an unmonitored user is refused" \
+    test "$(web POST /api/commands '{"commands":[{"command":"disable-user","args":["root"]}]}')" = 403
+check "lock through the web UI" \
+    test "$(web POST /api/commands '{"commands":[{"command":"disable-user","args":["kid"],"options":{"hours":1,"reason":"web"}}]}')" = 200
+check "web UI lock expires the account" account_expired
+check "unlock through the web UI" \
+    test "$(web POST /api/commands '{"commands":[{"command":"enable-user","args":["kid"]}]}')" = 200
+check "web UI unlock reopens the account" account_open
+check "change is logged with the client address" \
+    bash -c "journalctl --no-pager -o cat | grep -q 'client 127.0.0.1 ran: cmctl block -- webapp'"
+check "other users cannot reach the broker" \
+    bash -c "! su -s /bin/bash nobody -c \"python3 -c 'import socket; s = socket.socket(socket.AF_UNIX); s.connect(\\\"/run/child-minder-broker.sock\\\")'\" 2>/dev/null"
+
+su kid -s /bin/bash -c "setsid xvfb-run -n 99 -f /home/kid/.Xauthority sleep 1000 >/dev/null 2>&1 &"
+wait_for 10 bash -c "pgrep -u kid -x Xvfb"
+sleep 1
+check "screenshot of the user's display" \
+    test "$(web POST /api/screenshot '{"user":"kid"}')" = 200
+check "screenshot is a PNG of display :99" \
+    bash -c "python3 -c \"import base64, json; r = json.load(open('/tmp/web.out')); assert r['display'] == ':99'; assert base64.b64decode(r['png']).startswith(b'\\\\x89PNG')\""
+check "screenshot of an unmonitored user is refused" \
+    test "$(web POST /api/screenshot '{"user":"root"}')" = 403
+end_kid_processes
+check "logout ends the session" test "$(web POST /api/logout)" = 200
+check "session is gone after logout" test "$(web GET /api/overview)" = 401
+
 echo "== Uninstall"
 cmctl disable-user kid -r functional >/dev/null
 (cd /root/new && printf 'y\nn\nn\n' | bash uninstall.sh >/tmp/uninstall.log 2>&1)
@@ -232,6 +297,8 @@ check "uninstall.sh succeeds" test $? -eq 0
 check "uninstall re-enables disabled accounts" account_open
 check "service is gone" bash -c '! systemctl cat child-minder'
 check "files are removed" bash -c 'test ! -e /usr/lib/child-minder && test ! -e /usr/bin/cmctl && test ! -e /usr/bin/cmctl.py'
+check "web UI units are gone" bash -c '! systemctl cat child-minder-web && ! systemctl cat child-minder-broker.socket'
+check "web UI user is removed" bash -c '! getent passwd child-minder-web'
 
 echo ""
 echo "${PASSED} passed, ${#FAILURES[@]} failed"
