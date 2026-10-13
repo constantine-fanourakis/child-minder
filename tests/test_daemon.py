@@ -186,6 +186,14 @@ class UsageStateTest(MinderTestCase):
         minder.reset_daily_usage()
         self.assertEqual(minder.usage.process_seconds("kid", "steam*"), 0)
 
+    def test_badly_typed_state_values_do_not_stop_the_daemon(self):
+        with open(self.state_path, 'w') as f:
+            json.dump({"last_reset": 5, "daily_usage": {"kid": {"x": None}}}, f)
+        minder = self.make_minder()
+        minder.reset_daily_usage()
+        self.assertIsNotNone(store.parse_time(minder.state["last_reset"]))
+        self.assertEqual(minder.usage.processes, {"kid": {}})
+
     def test_same_day_keeps_usage(self):
         minder = self.make_minder()
         minder.usage.charge_process("kid", "steam*", 30)

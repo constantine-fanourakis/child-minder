@@ -84,7 +84,7 @@ class ChildMinder:
         self.config = self.load_config()
 
         self.state = self.load_state()
-        self.usage = policy.Usage.from_state(self.state)
+        self.usage = policy.Usage.from_state(self.state, self.logger.warning)
 
         self.session_ended_at: Dict[str, float] = {}
         self.display_cache: Dict[str, Tuple[str, float]] = {}
@@ -193,7 +193,12 @@ class ChildMinder:
         except store.StoreError as e:
             self.logger.warning(f"Could not load state: {e}")
             state = None
-        return state or {"last_reset": datetime.now().isoformat()}
+        state = state or {}
+        if store.parse_time(state.get("last_reset")) is None:
+            if "last_reset" in state:
+                self.logger.warning("Ignoring unreadable last_reset in the state file")
+            state["last_reset"] = datetime.now().isoformat()
+        return state
 
     def save_state(self):
         """Save current state to file"""
@@ -215,11 +220,7 @@ class ChildMinder:
 
     def reset_daily_usage(self):
         """Reset daily usage counters when the date changes"""
-        try:
-            last_reset = datetime.fromisoformat(
-                self.state.get("last_reset", datetime.now().isoformat()))
-        except ValueError:
-            last_reset = datetime.now()
+        last_reset = store.parse_time(self.state.get("last_reset")) or datetime.now()
         if datetime.now().date() != last_reset.date():
             self.clear_usage("new day")
 

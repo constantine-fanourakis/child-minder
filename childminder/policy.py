@@ -8,7 +8,7 @@ warnings to give and sessions to end. The daemon carries those out.
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Hashable, List, Optional, Set, Tuple
+from typing import Callable, Dict, Hashable, List, Optional, Set, Tuple
 
 from childminder import config as cfg
 
@@ -61,16 +61,30 @@ class Usage:
         self.warned: Dict[Hashable, Set[float]] = {}
 
     @classmethod
-    def from_state(cls, state: dict) -> "Usage":
+    def from_state(cls, state: dict, warn: Optional[Callable[[str], None]] = None) -> "Usage":
+        """Restore usage saved by to_state, dropping anything that is not a counter"""
+        dropped = []
+
+        def counters(value) -> dict:
+            if not isinstance(value, dict):
+                return {}
+            kept = {key: float(seconds) for key, seconds in value.items()
+                    if cfg.is_number(seconds)}
+            if len(kept) != len(value):
+                dropped.append(True)
+            return kept
+
         def table(value) -> dict:
             if not isinstance(value, dict):
                 return {}
-            return {user: {key: float(seconds) for key, seconds in keys.items()}
-                    for user, keys in value.items() if isinstance(keys, dict)}
-        daily = state.get("user_daily_usage")
-        return cls(table(state.get("daily_usage")), table(state.get("group_usage")),
-                   {user: float(seconds) for user, seconds in daily.items()}
-                   if isinstance(daily, dict) else {})
+            return {user: counters(keys) for user, keys in value.items()
+                    if isinstance(keys, dict)}
+
+        usage = cls(table(state.get("daily_usage")), table(state.get("group_usage")),
+                    counters(state.get("user_daily_usage")))
+        if dropped and warn:
+            warn("Ignoring usage counters in the state file that are not numbers")
+        return usage
 
     def to_state(self) -> dict:
         return {"daily_usage": self.processes, "group_usage": self.groups,

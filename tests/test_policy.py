@@ -70,6 +70,15 @@ class UsageStateTest(unittest.TestCase):
                                          "user_daily_usage": "x"})
         self.assertTrue(usage.is_empty())
 
+    def test_counters_that_are_not_numbers_are_dropped(self):
+        warnings = []
+        usage = policy.Usage.from_state(
+            {"daily_usage": {"kid": {"x": None, "steam*": 30}},
+             "user_daily_usage": {"kid": "5", "kid2": 50}}, warnings.append)
+        self.assertEqual(usage.processes, {"kid": {"steam*": 30}})
+        self.assertEqual(usage.daily, {"kid2": 50})
+        self.assertEqual(len(warnings), 1)
+
 
 class EvaluateTest(unittest.TestCase):
     def evaluate(self, raw_config, processes, usage=None, elapsed=5.0):
