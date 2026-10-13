@@ -25,7 +25,7 @@ class AccountsTest(unittest.TestCase):
         self.assertEqual(run.calls, [['usermod', '--expiredate', '1', 'kid'],
                                      ['passwd', '-l', 'kid']])
 
-    def test_failed_expiry_is_an_error_and_skips_the_password(self):
+    def test_failed_expiration_is_an_error_and_skips_the_password(self):
         run = Runner(failing=('usermod',))
         self.assertEqual(accounts.lock("kid", run), "usermod: refused")
         self.assertEqual(len(run.calls), 1)

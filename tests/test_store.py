@@ -54,7 +54,7 @@ class NormalizeUserControlTest(unittest.TestCase):
         self.assertEqual(store.normalize_user_control({}),
                          {"disabled_users": {}, "daily_schedules": {}})
 
-    def test_damaged_disable_records_stay_disabled(self):
+    def test_malformed_disable_records_stay_disabled(self):
         warnings = []
         data = store.normalize_user_control({"disabled_users": {
             "kid": "yes", "kid2": {"reason": "x", "re_enable_at": "tomorrow"}}}, warnings.append)

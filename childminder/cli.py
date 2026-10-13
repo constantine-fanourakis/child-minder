@@ -514,7 +514,7 @@ class ChildMinderManager:
                 disable_info["re_enable_at"] = (datetime.now() + timedelta(hours=hours)).isoformat()
 
             # The lock keeps the daemon from re-enabling the account between
-            # the record and the expiry. The record is saved first, so a
+            # the record and the expiration. The record is saved first, so a
             # failure to save cannot leave an account locked that the daemon
             # would never re-enable and user-status would not show.
             with self.user_control.locked():

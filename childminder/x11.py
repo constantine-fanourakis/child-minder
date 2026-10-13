@@ -85,7 +85,7 @@ def read_cookie(path: str, number: int, hostname: str):
             elif family == FAMILY_WILD and wild is None:
                 wild = cookie
     except (struct.error, X11Error):
-        pass  # Use whatever entries came before the damage
+        pass  # Use the entries read before the malformed one
     return local if local is not None else wild
 
 

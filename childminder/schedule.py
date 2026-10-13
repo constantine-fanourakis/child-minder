@@ -51,7 +51,7 @@ def normalize(raw, warn: Optional[Warn] = None) -> dict:
     Malformed windows and unknown no_access entries are dropped, with a
     warning when warn is given. A day type whose entry holds windows but
     none that can be read is denied rather than left unrestricted, so a
-    damaged schedule never opens access.
+    schedule with unreadable windows never opens access.
     """
     if not isinstance(raw, dict):
         raw = {}

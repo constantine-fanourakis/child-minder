@@ -37,7 +37,7 @@ def lock(username: str, run: Runner) -> Optional[str]:
 
 
 def unlock(username: str, run: Runner) -> Tuple[Optional[str], Optional[str]]:
-    """Clear an account's expiry and password lock.
+    """Clear an account's expiration date and password lock.
 
     Returns (error, note): error if the account is still locked, and note if
     only the password unlock failed. passwd -u refuses to unlock an account

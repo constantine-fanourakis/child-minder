@@ -84,7 +84,7 @@ if os.path.exists(path):
         data = json.load(f)
     for username in data.get('disabled_users', {}):
         print(f'Re-enabling user: {username}')
-        # Clearing the expiry is what restores login; passwd -u is best effort
+        # Clearing the expiration date is what restores login; passwd -u is best effort
         # because it refuses to leave an account passwordless.
         result = subprocess.run(['usermod', '--expiredate', '', username],
                                 capture_output=True, text=True)

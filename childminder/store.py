@@ -78,7 +78,7 @@ def normalize_user_control(raw: dict, warn: Optional[Warn] = None) -> dict:
 
     A disable record that is not an object is kept as a permanent disable,
     and an unreadable re_enable_at is dropped, also leaving it permanent:
-    a damaged record never lets an account back in early.
+    an unreadable record never lets an account back in early.
     """
     disabled = raw.get("disabled_users")
     if not isinstance(disabled, dict):

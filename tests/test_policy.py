@@ -65,7 +65,7 @@ class UsageStateTest(unittest.TestCase):
         self.assertEqual(restored.group_seconds("kid", "games"), 40)
         self.assertEqual(restored.daily_seconds("kid"), 50)
 
-    def test_damaged_state_starts_empty(self):
+    def test_malformed_state_starts_empty(self):
         usage = policy.Usage.from_state({"daily_usage": [], "group_usage": {"kid": 3},
                                          "user_daily_usage": "x"})
         self.assertTrue(usage.is_empty())

@@ -17,7 +17,7 @@ StandardOutput=journal
 StandardError=journal
 
 # Security settings
-# PrivateTmp hides /tmp/.X11-unix from helpers launched for a user, so anything
+# PrivateTmp gives the service its own empty /tmp, without /tmp/.X11-unix, so anything
 # started from here must reach the desktop over the session bus in /run/user,
 # not over an X11 socket.
 PrivateTmp=true
