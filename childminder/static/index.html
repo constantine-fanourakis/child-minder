@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Child Minder</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>Child Minder</h1>
+  <button id="logout" class="link" hidden>Log out</button>
+</header>
+
+<main>
+  <section id="login-view" hidden>
+    <form id="login-form" class="card">
+      <h2>Log in</h2>
+      <p id="no-password" class="notice" hidden>
+        No password is set. On the computer, run <code>sudo cmctl web-password</code>.
+      </p>
+      <label for="password">Password</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Log in</button>
+      <p id="login-error" class="error" hidden></p>
+    </form>
+  </section>
+
+  <section id="app-view" hidden>
+    <nav>
+      <button data-tab="today" class="tab active">Today</button>
+      <button data-tab="settings" class="tab">Settings</button>
+      <button data-tab="logs" class="tab">Logs</button>
+    </nav>
+    <p id="error" class="error" hidden></p>
+
+    <div id="tab-today" class="tab-panel">
+      <div id="summary" class="card"></div>
+      <div id="users"></div>
+    </div>
+
+    <div id="tab-settings" class="tab-panel" hidden>
+      <div id="settings"></div>
+    </div>
+
+    <div id="tab-logs" class="tab-panel" hidden>
+      <div class="card">
+        <div class="row">
+          <h2>Recent log entries</h2>
+          <button id="logs-refresh" class="secondary">Refresh</button>
+        </div>
+        <pre id="log-lines"></pre>
+      </div>
+    </div>
+  </section>
+</main>
+</body>
+</html>
