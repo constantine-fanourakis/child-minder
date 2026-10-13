@@ -484,10 +484,14 @@ class ChildMinder:
         if last and now - last < SESSION_END_INTERVAL:
             return
 
+        try:
+            uid = pwd.getpwnam(username).pw_uid
+        except KeyError:
+            return
         targets = []
         for proc in psutil.process_iter(['pid', 'uids', 'ppid']):
             uids = proc.info['uids']
-            if uids is None or self.get_username(uids.real) != username:
+            if uids is None or uids.real != uid:
                 continue
             if self.is_protected_process(proc.info['pid'], proc.info['ppid']):
                 continue

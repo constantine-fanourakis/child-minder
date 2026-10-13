@@ -391,7 +391,10 @@ class TerminalMessageTest(MinderTestCase):
 class EndSessionTest(MinderTestCase):
     def end_session(self, procs):
         minder = self.make_minder()
-        minder.get_username = lambda uid: {KID_UID: "kid"}.get(uid)
+        patcher = mock.patch.object(child_minder.pwd, 'getpwnam',
+                                    return_value=mock.Mock(pw_uid=KID_UID))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         minder.run_command = mock.Mock()
         minder.send_notification = mock.Mock()
         minder.write_to_user_terminals = mock.Mock()
