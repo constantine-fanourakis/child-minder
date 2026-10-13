@@ -484,6 +484,12 @@ class NotificationTest(MinderTestCase):
         minder.run_as_user = mock.Mock(return_value=None)
         self.assertFalse(minder.send_notification("kid", "Title", "Message"))
 
+    def test_names_with_dots_get_notifications(self):
+        minder = self.make_minder()
+        minder.run_as_user = mock.Mock(return_value=mock.Mock(returncode=0))
+        self.assertTrue(minder.send_notification("anna.k", "Title", "Message"))
+        self.assertEqual(minder.run_as_user.call_args.args[0], "anna.k")
+
 
 class EndSessionTest(MinderTestCase):
     def end_session(self, procs):

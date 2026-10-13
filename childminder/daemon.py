@@ -407,13 +407,6 @@ class ChildMinder:
         self.display_cache[username] = (display, time.monotonic())
         return display
 
-    def is_valid_username(self, username: str) -> bool:
-        """Validate username to prevent injection attacks"""
-        # Valid Unix usernames: alphanumeric, underscore, hyphen, start with letter/underscore
-        if not username or len(username) > 32:
-            return False
-        return bool(re.match(r'^[a-z_][a-z0-9_-]*$', username, re.IGNORECASE))
-
     def is_valid_display(self, display: str) -> bool:
         """Validate display string to prevent injection"""
         # Valid display format: :N or :N.M or hostname:N
@@ -455,11 +448,11 @@ class ChildMinder:
 
     def send_notification(self, username: str, title: str, message: str,
                          urgency: str = 'normal', play_sound: bool = False) -> bool:
-        """Send a desktop notification to a user, returning whether it was delivered"""
-        if not self.is_valid_username(username):
-            self.logger.error(f"Invalid username for notification: {username}")
-            return False
+        """Send a desktop notification to a user, returning whether it was delivered.
 
+        The name is only looked up with pwd and passed to subprocess as part
+        of an argv list, so any name the system accepts is safe here.
+        """
         if urgency not in ('low', 'normal', 'critical'):
             urgency = 'normal'
 
