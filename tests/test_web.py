@@ -148,20 +148,11 @@ class LoginTest(WebTestCase):
         self.assertEqual(status, 401)
         self.assertIsNone(response.getheader("Set-Cookie"))
 
-    def test_repeated_failures_lock_the_address_out(self):
-        for _ in range(web.MAX_FAILURES):
-            self.assertEqual(self.login("wrong")[0], 401)
-        status, response, _ = self.login()
-        self.assertEqual(status, 429)
-        self.assertTrue(int(response.getheader("Retry-After")) > 0)
-
-    def test_success_clears_earlier_failures(self):
-        for _ in range(web.MAX_FAILURES - 1):
-            self.login("wrong")
+    def test_failed_logins_never_lock_anyone_out(self):
+        with self.assertLogs("childminder.web", "WARNING"):
+            for _ in range(20):
+                self.assertEqual(self.login("wrong")[0], 401)
         self.assertEqual(self.login()[0], 200)
-        self.cookie = self.csrf = None
-        for _ in range(web.MAX_FAILURES - 1):
-            self.assertEqual(self.login("wrong")[0], 401)
 
     def test_login_requires_json(self):
         status, _, _ = self.request("POST", "/api/login", b"password=secret",

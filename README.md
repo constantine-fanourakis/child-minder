@@ -473,7 +473,9 @@ in `monitored_users`, that is every regular user.
 
 - The page is served over plain HTTP. Anyone on the network who can capture
   its traffic can read the password, the session cookie and screenshots.
-- Five failed logins from one address lock that address out for five minutes.
+- Failed logins are logged in the journal but not limited, so nobody can lock
+  you out by failing on purpose. Use a long password: anyone who can reach the
+  page, including a monitored user on the same computer, can keep guessing.
 - Sessions last 12 hours. Restarting `child-minder-web`, or setting a new
   password, logs every session out.
 - The session cookie is `HttpOnly` and `SameSite=Strict`, and every change

@@ -43,8 +43,6 @@ STATIC_FILES = {
 
 COOKIE_NAME = "cm_session"
 SESSION_SECONDS = 12 * 3600
-MAX_FAILURES = 5
-LOCKOUT_SECONDS = 300
 MAX_BODY_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 BROKER_TIMEOUT = 120
@@ -117,13 +115,17 @@ class Session:
 
 
 class WebApp:
-    """State shared by every request: sessions, login failures and the broker"""
+    """State shared by every request: sessions and the broker.
+
+    Failed logins are logged but neither limited nor locked out, so nobody
+    can lock the administrator out by failing on purpose; the password's
+    length is what makes guessing impractical.
+    """
 
     def __init__(self, web_config_path: Path, broker: Callable[[dict], dict]):
         self.web_config_path = Path(web_config_path)
         self.broker = broker
         self.sessions: Dict[str, Session] = {}
-        self.failures: Dict[str, Tuple[int, float]] = {}  # ip: (count, locked until)
         self.lock = threading.Lock()
         # One scrypt at a time, so a flood of logins cannot exhaust memory
         self.verify_lock = threading.Lock()
@@ -140,14 +142,6 @@ class WebApp:
         return record if isinstance(record, dict) else None
 
     def login(self, ip: str, password: str) -> Tuple[str, Session]:
-        now = time.monotonic()
-        with self.lock:
-            count, locked_until = self.failures.get(ip, (0, 0.0))
-            if locked_until > now:
-                raise ApiError(HTTPStatus.TOO_MANY_REQUESTS,
-                               "Too many failed logins; try again later",
-                               {"Retry-After": str(int(locked_until - now) + 1)})
-
         record = self.password_record()
         if record is None:
             raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE,
@@ -155,19 +149,10 @@ class WebApp:
         with self.verify_lock:
             matched = webauth.verify_password(password, record)
 
+        if not matched:
+            logger.warning(f"Failed login from {ip}")
+            raise ApiError(HTTPStatus.UNAUTHORIZED, "Wrong password")
         with self.lock:
-            if not matched:
-                count, locked_until = self.failures.get(ip, (0, 0.0))
-                count += 1
-                if count >= MAX_FAILURES:
-                    self.failures[ip] = (0, time.monotonic() + LOCKOUT_SECONDS)
-                    logger.warning(f"Failed login from {ip}; locked out for "
-                                   f"{LOCKOUT_SECONDS} seconds")
-                else:
-                    self.failures[ip] = (count, 0.0)
-                    logger.warning(f"Failed login from {ip}")
-                raise ApiError(HTTPStatus.UNAUTHORIZED, "Wrong password")
-            self.failures.pop(ip, None)
             token = secrets.token_urlsafe(32)
             session = Session(secrets.token_urlsafe(32), time.monotonic() + SESSION_SECONDS,
                               str(record.get("salt")))
@@ -196,13 +181,10 @@ class WebApp:
             self.sessions.pop(token, None)
 
     def _drop_expired(self):
-        """Forget expired sessions and lockouts; the caller holds self.lock"""
+        """Forget expired sessions; the caller holds self.lock"""
         now = time.monotonic()
         for token in [t for t, s in self.sessions.items() if s.expires <= now]:
             del self.sessions[token]
-        for ip in [ip for ip, (count, until) in self.failures.items()
-                   if count == 0 and until <= now]:
-            del self.failures[ip]
 
     def ask_broker(self, request: dict):
         """Return the result of a broker request, raising ApiError for its error"""
