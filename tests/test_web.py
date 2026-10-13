@@ -257,6 +257,24 @@ class OverviewTest(WebTestCase):
         self.assertFalse(kid["allowed_now"])
         self.assertEqual(kid["schedule_days"], {"weekday": "No access", "weekend": "No access"})
 
+    def test_schedule_is_enforced_only_when_everything_is_on(self):
+        accounts = {"kid": mock.Mock(pw_uid=1001), "other": mock.Mock(pw_uid=1002),
+                    "root": mock.Mock(pw_uid=0)}
+        self.write(self.state_path, {"user_daily_usage": {"other": 1, "root": 1}})
+        cases = (({}, {"kid": True, "other": False, "root": False}),
+                 ({"enabled": False}, {"kid": False}),
+                 ({"user_control": {"enabled": False}}, {"kid": False}))
+        for overrides, expected in cases:
+            config = {"monitored_users": ["kid", "root"], "user_control": {"enabled": True}}
+            config.update(overrides)
+            self.write(self.config_path, config)
+            with mock.patch.object(broker.pwd, "getpwnam", side_effect=accounts.__getitem__):
+                users = {u["name"]: u for u in self.overview()["users"]}
+            for name, enforced in expected.items():
+                self.assertEqual(users[name]["schedule_enforced"], enforced, (overrides, name))
+        self.assertEqual({n: u["monitored"] for n, u in users.items()},
+                         {"kid": True, "root": False, "other": False})
+
     def test_users_with_records_are_listed_even_if_not_monitored(self):
         self.write(self.state_path, {"user_daily_usage": {"other": 60}})
         names = [u["name"] for u in self.overview()["users"]]
@@ -507,22 +525,25 @@ class CommandTest(WebTestCase):
         self.post({"command": "reset"}, {"command": "enable"})
         self.assertEqual(held, [True, True])
 
-    def test_account_commands_are_limited_to_monitored_users(self):
-        for command in ("disable-user", "enable-user"):
-            status, _, body = self.post({"command": command, "args": ["parent"]})
-            self.assertEqual(status, 403, command)
-            self.assertIn("not a monitored user", body["error"])
+    def test_locking_is_limited_to_monitored_users(self):
+        status, _, body = self.post({"command": "disable-user", "args": ["parent"]})
+        self.assertEqual(status, 403)
+        self.assertIn("not a monitored user", body["error"])
         self.assertEqual(self.post({"command": "block", "args": ["x"]},
-                                   {"command": "enable-user", "args": ["parent"]})[0], 403)
+                                   {"command": "disable-user", "args": ["parent"]})[0], 403)
         self.assertEqual(self.ran(), [])
 
-    def test_account_commands_follow_the_validated_monitored_users(self):
+    def test_locking_follows_the_validated_monitored_users(self):
         self.write(self.config_path, {"monitored_users": ["*"]})
-        self.assertEqual(self.post({"command": "enable-user", "args": ["parent"]})[0], 200)
+        self.assertEqual(self.post({"command": "disable-user", "args": ["parent"]})[0], 200)
+        for users in ([], "kid"):
+            self.write(self.config_path, {"monitored_users": users})
+            self.assertEqual(self.post({"command": "disable-user", "args": ["kid"]})[0], 403)
+
+    def test_any_user_can_be_unlocked(self):
         self.write(self.config_path, {"monitored_users": []})
-        self.assertEqual(self.post({"command": "disable-user", "args": ["kid"]})[0], 403)
-        self.write(self.config_path, {"monitored_users": "kid"})
-        self.assertEqual(self.post({"command": "enable-user", "args": ["kid"]})[0], 403)
+        self.assertEqual(self.post({"command": "enable-user", "args": ["parent"]})[0], 200)
+        self.assertEqual(self.ran(), [["enable-user", "--", "parent"]])
 
     def test_commands_need_the_csrf_token(self):
         status, _, _ = self.request("POST", "/api/commands",

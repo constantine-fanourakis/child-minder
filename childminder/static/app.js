@@ -164,7 +164,11 @@ function userStatus(user) {
     const until = user.disabled.re_enable_at;
     return el("span", { class: "badge bad" }, until ? `Locked until ${when(until)}` : "Locked");
   }
-  if (!user.allowed_now) return el("span", { class: "badge warn" }, "Outside access hours");
+  if (!user.allowed_now) {
+    return user.schedule_enforced
+      ? el("span", { class: "badge warn" }, "Outside access hours")
+      : el("span", { class: "badge" }, "Outside access hours (not enforced)");
+  }
   return el("span", { class: "badge ok" }, "Allowed now");
 }
 
@@ -208,6 +212,7 @@ function lockControls(user) {
     return el("div", { class: "actions" },
       button("Unlock", () => run([cmd("enable-user", user.name)]), ""));
   }
+  if (!user.monitored) return null;
   const duration = el("select", {},
     LOCK_CHOICES.map(([value, label]) => el("option", { value }, label)));
   const reason = el("input", { type: "text", placeholder: "Reason (optional)", maxlength: "200" });
@@ -237,13 +242,20 @@ function renderUser(user) {
     card.append(el("h3", {}, "Applications"),
       ...user.processes.map((line) => meter(line.subject, line)));
   }
+  // append() would insert a missing control as the text "null"
+  const controls = [lockControls(user)];
+  if (user.monitored) {
+    const shoot = button("Screenshot", () => takeScreenshot(user.name, shoot));
+    controls.push(el("div", { class: "actions" }, shoot), screenshotView(user.name));
+  }
   card.append(el("h3", {}, "Access hours"),
     el("ul", { class: "plain" },
       el("li", {}, `Weekdays: ${user.schedule_days.weekday}`),
       el("li", {}, `Weekends: ${user.schedule_days.weekend}`)),
-    lockControls(user));
-  const shoot = button("Screenshot", () => takeScreenshot(user.name, shoot));
-  card.append(el("div", { class: "actions" }, shoot), screenshotView(user.name));
+    ...controls.filter((control) => control !== null));
+  if (!user.monitored) {
+    card.append(el("p", { class: "muted" }, "Not monitored, so it cannot be locked or viewed."));
+  }
   return card;
 }
 

@@ -105,8 +105,9 @@ DISPLAY_RE = re.compile(r'^(unix)?:[0-9]+(\.[0-9]+)?$')
 X11_CAPTURE = Path(__file__).resolve().parent / "x11.py"
 
 # Commands whose first argument must be a monitored user, so the web
-# password cannot lock out an account the daemon does not watch
-MONITORED_USER_COMMANDS = {"disable-user", "enable-user"}
+# password cannot lock out an account the daemon does not watch. Unlocking
+# is not limited: it only undoes a lock Child Minder applied.
+MONITORED_USER_COMMANDS = {"disable-user"}
 
 logger = logging.getLogger("childminder.broker")
 
@@ -278,9 +279,18 @@ class Broker:
             warnings.append(str(e))
             user_control = store.normalize_user_control({})
         report = policy.usage_report(usage, config, now)
+        # When the daemon ends sessions outside access hours
+        enforcing = config["enabled"] and config["user_control"]["enabled"]
+        _, uid_max = cfg.read_uid_range()
 
         users = []
         for name in self.user_names(config, usage, user_control):
+            try:
+                uid = pwd.getpwnam(name).pw_uid
+            except KeyError:
+                uid = None
+            monitored = (uid is not None and cfg.is_regular_uid(config, uid, uid_max)
+                         and cfg.monitors(config, name))
             sched = schedule.normalize(user_control["daily_schedules"].get(name))
             daily = next((line for line in report["daily"] if line.username == name), None)
             users.append({
@@ -290,6 +300,8 @@ class Broker:
                 "schedule_days": {day: schedule.format_day(sched, day)
                                   for day in cfg.DAY_TYPES},
                 "allowed_now": schedule.is_allowed(sched, now),
+                "monitored": monitored,
+                "schedule_enforced": enforcing and monitored,
                 "daily": usage_line(daily, limit_seconds=policy.daily_limit(config, name, now)),
                 "processes": [dict(usage_line(line), subject=line.subject)
                               for line in report["process"] if line.username == name],
@@ -306,6 +318,7 @@ class Broker:
             "day_type": cfg.day_type(now),
             "service": self.service_state(),
             "monitoring": config["enabled"],
+            "user_control": config["user_control"]["enabled"],
             "last_reset": state.get("last_reset"),
             "state_saved": saved,
             "users": users,
