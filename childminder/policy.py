@@ -181,7 +181,7 @@ def evaluate(processes: List[Process], config: dict, usage: Usage,
         if limit_key:
             limited_keys[(proc.username, limit_key)] = limit_seconds
             app_names.setdefault((proc.username, limit_key), proc.name)
-        else:
+        elif usage_key:
             monitored_keys.add((proc.username, usage_key))
         if group:
             seen_groups.add((proc.username, group))

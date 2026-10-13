@@ -76,6 +76,11 @@ class EvaluateTest(unittest.TestCase):
         self.usage = usage or policy.Usage()
         return policy.evaluate(processes, make_config(raw_config), self.usage, elapsed, WEEKDAY)
 
+    def test_group_only_process_is_charged_to_its_group_alone(self):
+        self.evaluate({"process_groups": {"media": ["mpv"]}}, [proc("mpv")])
+        self.assertEqual(self.usage.groups, {"kid": {"media": 5}})
+        self.assertEqual(self.usage.processes, {})
+
     def test_blocked_process_is_terminated_unless_protected(self):
         actions = self.evaluate({"blocked_processes": ["fortnite*"]},
                                 [proc("fortnite"), proc("fortnite-helper", protected=True),
