@@ -199,6 +199,28 @@ class ConfigCommandTest(CmctlTestCase):
             self.write_config({"monitored_users": users})
             self.assertIn(f"Monitored Users: {text}", self.run_cmctl("config"))
 
+    def test_one_day_limit_is_removed_in_one_save(self):
+        self.write_config({"user_daily_limits": {"kid": {"weekday": 60, "weekend": 120}}})
+        self.run_cmctl("user-weekend-unlimit", "kid")
+        self.assertEqual(self.exit_status, 0)
+        self.assertEqual(self.read_json(self.config_path)["user_daily_limits"],
+                         {"kid": {"weekday": 60}})
+        self.assertEqual(self.run_calls.count(['systemctl', 'reload', 'child-minder']), 1)
+
+    def test_removing_the_last_day_drops_the_entry(self):
+        self.write_config({"user_daily_limits": {"kid": 90}})
+        self.run_cmctl("user-weekday-unlimit", "kid")
+        self.assertEqual(self.read_json(self.config_path)["user_daily_limits"],
+                         {"kid": {"weekend": 90}})
+        self.run_cmctl("user-weekend-unlimit", "kid")
+        self.assertEqual(self.read_json(self.config_path)["user_daily_limits"], {})
+
+    def test_removing_an_unset_day_limit_fails(self):
+        self.write_config({"user_daily_limits": {"kid": {"weekday": 60}}})
+        out = self.run_cmctl("user-weekend-unlimit", "kid")
+        self.assertIn("no weekend daily screen time limit", out)
+        self.assertEqual(self.exit_status, 1)
+
     def test_monitored_users(self):
         self.run_cmctl("add-user", "kid")
         self.assertEqual(self.read_json(self.config_path)["monitored_users"], ["kid"])

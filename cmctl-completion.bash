@@ -9,7 +9,7 @@ _cmctl_completions() {
 
     commands="block unblock limit unlimit add-to-group remove-from-group \
 group-limit group-unlimit user-limit user-weekday-limit user-weekend-limit \
-user-unlimit groups add-user remove-user config usage status \
+user-unlimit user-weekday-unlimit user-weekend-unlimit groups add-user remove-user config usage status \
 reset logs enable disable disable-user enable-user set-weekday-hours \
 set-weekend-hours set-user-hours add-weekday-window add-weekend-window \
 remove-weekday-window remove-weekend-window clear-weekday-windows \
@@ -22,7 +22,8 @@ set-weekday-hours set-weekend-hours set-user-hours add-weekday-window \
 add-weekend-window remove-weekday-window remove-weekend-window user-status \
 clear-weekday-windows clear-weekend-windows clear-user-hours \
 deny-weekday-access deny-weekend-access \
-user-limit user-weekday-limit user-weekend-limit user-unlimit"
+user-limit user-weekday-limit user-weekend-limit user-unlimit \
+user-weekday-unlimit user-weekend-unlimit"
 
     # Complete subcommand (first argument)
     if [ "$COMP_CWORD" -eq 1 ]; then

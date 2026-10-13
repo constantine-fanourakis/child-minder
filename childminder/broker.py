@@ -73,6 +73,8 @@ COMMANDS = {
     "user-weekday-limit": ("text", "int"),
     "user-weekend-limit": ("text", "int"),
     "user-unlimit": ("text",),
+    "user-weekday-unlimit": ("text",),
+    "user-weekend-unlimit": ("text",),
     "add-user": ("text",),
     "remove-user": ("text",),
     "enable": (),

@@ -227,11 +227,23 @@ cmctl group-limit games 120             # Set group limit (minutes)
 cmctl group-unlimit games               # Remove group limit
 ```
 
+### Daily screen time
+
+```bash
+cmctl user-limit johnny 120             # 120 minutes a day, weekdays and weekends
+cmctl user-weekday-limit johnny 60      # Weekday limit only
+cmctl user-weekend-limit johnny 180     # Weekend limit only
+cmctl user-weekday-unlimit johnny       # Remove the weekday limit, keep the weekend one
+cmctl user-weekend-unlimit johnny       # Remove the weekend limit, keep the weekday one
+cmctl user-unlimit johnny               # Remove both
+```
+
 ### User management
 
 ```bash
 cmctl add-user johnny       # Monitor this user
 cmctl remove-user johnny    # Stop monitoring
+cmctl add-user '*'          # Monitor every regular user (an empty list monitors nobody)
 ```
 
 ### User account control

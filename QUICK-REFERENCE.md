@@ -72,6 +72,8 @@ sudo cmctl unlimit minecraft        # Remove limit
 sudo cmctl user-limit johnny 120           # 2 hours total, same for weekday & weekend
 sudo cmctl user-weekday-limit johnny 60    # Weekdays: 1 hour total
 sudo cmctl user-weekend-limit johnny 180   # Weekends: 3 hours total
+sudo cmctl user-weekday-unlimit johnny     # Remove only the weekday limit
+sudo cmctl user-weekend-unlimit johnny     # Remove only the weekend limit
 sudo cmctl user-unlimit johnny             # Remove all daily limits for user
 ```
 

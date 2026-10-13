@@ -230,28 +230,34 @@ class ChildMinderManager:
         print(f"Group '{group_name}' has no time limit set")
         return False
 
+    @staticmethod
+    def _daily_limit_days(limits: dict, username: str) -> dict:
+        """Return username's daily limits as {day type: minutes}, for editing.
+
+        A wrong-typed day would make the daemon drop the whole entry, so only
+        that day is dropped, with a warning.
+        """
+        entry = limits.get(username, {})
+        if cfg.is_minutes(entry):
+            return {"weekday": entry, "weekend": entry}
+        if isinstance(entry, dict):
+            kept = {day: entry[day] for day in cfg.DAY_TYPES
+                    if cfg.is_minutes(entry.get(day))}
+            if len(kept) != sum(day in entry for day in cfg.DAY_TYPES):
+                _print_warning(f"Ignoring invalid daily limit values for '{username}'")
+            return kept
+        if username in limits:
+            _print_warning(f"Ignoring invalid daily limit for '{username}';"
+                           " starting it empty")
+        return {}
+
     def set_user_daily_limit(self, username: str, minutes: int, day_type: str = 'both'):
         """Set overall daily screen time limit for a user (weekday, weekend, or both)"""
         if not self._check_minutes(minutes):
             return False
         config = self.load_config()
         limits = self._dict_entry(config, 'user_daily_limits')
-        entry = limits.get(username, {})
-        if cfg.is_minutes(entry):
-            entry = {"weekday": entry, "weekend": entry}
-        elif isinstance(entry, dict):
-            # A wrong-typed sibling day would make the daemon drop the whole
-            # entry, so drop only that day before setting the other one.
-            kept = {day: entry[day] for day in cfg.DAY_TYPES
-                    if cfg.is_minutes(entry.get(day))}
-            if len(kept) != sum(day in entry for day in cfg.DAY_TYPES):
-                _print_warning(f"Ignoring invalid daily limit values for '{username}'")
-            entry = kept
-        else:
-            if username in limits:
-                _print_warning(f"Ignoring invalid daily limit for '{username}';"
-                               " starting it empty")
-            entry = {}
+        entry = self._daily_limit_days(limits, username)
         if day_type in ('weekday', 'both'):
             entry['weekday'] = minutes
         if day_type in ('weekend', 'both'):
@@ -262,6 +268,23 @@ class ChildMinderManager:
             print(f"Set daily screen time limit for '{username}' to {minutes} minutes (weekday and weekend)")
         else:
             print(f"Set {day_type} daily screen time limit for '{username}' to {minutes} minutes")
+        return True
+
+    def remove_user_day_limit(self, username: str, day: str):
+        """Remove a user's daily screen time limit for one day type, in one save"""
+        config = self.load_config()
+        limits = self._dict_entry(config, 'user_daily_limits')
+        entry = self._daily_limit_days(limits, username)
+        if day not in entry:
+            print(f"'{username}' has no {day} daily screen time limit set")
+            return False
+        del entry[day]
+        if entry:
+            limits[username] = entry
+        else:
+            del limits[username]
+        self.save_config(config)
+        print(f"Removed {day} daily screen time limit for '{username}'")
         return True
 
     def remove_user_daily_limit(self, username: str):
@@ -902,6 +925,11 @@ def main():
     user_unlimit_parser = subparsers.add_parser('user-unlimit', help='Remove overall daily screen time limit for a user')
     user_unlimit_parser.add_argument('username', help='Username')
 
+    for day in ('weekday', 'weekend'):
+        day_unlimit_parser = subparsers.add_parser(
+            f'user-{day}-unlimit', help=f'Remove the {day} daily screen time limit for a user')
+        day_unlimit_parser.add_argument('username', help='Username')
+
     subparsers.add_parser('groups', help='List all process groups')
     
     # User management
@@ -1048,6 +1076,8 @@ Note: To disable a specific user account instead, use "cmctl disable-user <usern
         succeeded = manager.set_user_daily_limit(args.username, args.minutes, 'weekend')
     elif args.command == 'user-unlimit':
         succeeded = manager.remove_user_daily_limit(args.username)
+    elif args.command in ('user-weekday-unlimit', 'user-weekend-unlimit'):
+        succeeded = manager.remove_user_day_limit(args.username, args.command.split('-')[1])
     elif args.command == 'groups':
         succeeded = manager.list_groups()
     elif args.command == 'add-user':

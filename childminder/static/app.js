@@ -302,15 +302,16 @@ function monitoredUsersSection(c) {
     inlineForm([name], "Add", () => run([cmd("add-user", name.value.trim())])));
 }
 
-// Commands that make a user's daily limits match two inputs; blank is no limit
-function dailyLimitCommands(user, weekday, weekend) {
+// Commands that make a user's daily limits match two inputs; blank is no
+// limit. entry is the current {weekday, weekend}, each minutes or null.
+function dailyLimitCommands(user, entry, weekday, weekend) {
   if (weekday === null && weekend === null) return [cmd("user-unlimit", user)];
   if (weekday === weekend) return [cmd("user-limit", user, weekday)];
   const commands = [];
-  // cmctl cannot clear one day type alone, so clear both and set the other
-  if (weekday === null || weekend === null) commands.push(cmd("user-unlimit", user));
-  if (weekday !== null) commands.push(cmd("user-weekday-limit", user, weekday));
-  if (weekend !== null) commands.push(cmd("user-weekend-limit", user, weekend));
+  for (const [day, minutes] of [["weekday", weekday], ["weekend", weekend]]) {
+    if (minutes !== null) commands.push(cmd(`user-${day}-limit`, user, minutes));
+    else if (entry[day] !== null) commands.push(cmd(`user-${day}-unlimit`, user));
+  }
   return commands;
 }
 
@@ -322,7 +323,7 @@ function dailyLimitsSection(c) {
       el("span", { class: "item-label" }, user),
       inlineForm([el("label", { class: "compact" }, "Weekday", weekday),
                   el("label", { class: "compact" }, "Weekend", weekend)], "Save",
-        () => run(dailyLimitCommands(user, readMinutes(weekday), readMinutes(weekend)))),
+        () => run(dailyLimitCommands(user, entry, readMinutes(weekday), readMinutes(weekend)))),
       button("Remove", () => run([cmd("user-unlimit", user)],
         `Remove ${user}'s daily limit?`), "danger"));
   });
