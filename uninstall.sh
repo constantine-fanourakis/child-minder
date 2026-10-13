@@ -123,9 +123,13 @@ echo -e "${GREEN}Child Minder has been uninstalled.${NC}"
 if [ -n "$BACKUP_DIR" ]; then
     echo ""
     echo "Your backup is saved at: $BACKUP_DIR"
-    echo "To restore configuration later:"
-    echo "  sudo cp -r $BACKUP_DIR/etc /etc/child-minder"
-    echo "  sudo cp -r $BACKUP_DIR/var-lib /var/lib/child-minder"
+    # Copying each directory's contents works whether or not the target
+    # still exists; cp -r of the directory itself would nest it inside one.
+    echo "To restore configuration, usage data and logs later:"
+    echo "  sudo mkdir -p /etc/child-minder /var/lib/child-minder /var/log/child-minder"
+    echo "  sudo cp -a $BACKUP_DIR/etc/. /etc/child-minder/"
+    echo "  sudo cp -a $BACKUP_DIR/var-lib/. /var/lib/child-minder/"
+    echo "  sudo cp -a $BACKUP_DIR/var-log/. /var/log/child-minder/"
 fi
 
 echo ""
