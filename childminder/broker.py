@@ -28,6 +28,7 @@ import socket
 import struct
 import subprocess
 import sys
+import time
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
@@ -57,6 +58,9 @@ LOG_TAIL_BYTES = 256 * 1024
 MAX_TEXT_LENGTH = 200
 MAX_BATCH = 10
 COMMAND_TIMEOUT = 60
+COMMAND_LOCK_TIMEOUT = 60
+# The longest a request can take, which the front end waits for
+LONGEST_REQUEST = COMMAND_LOCK_TIMEOUT + MAX_BATCH * COMMAND_TIMEOUT
 
 # cmctl subcommands the web UI may run: the kinds of their positional
 # arguments, and of the --name=value options they accept
@@ -387,6 +391,24 @@ class Broker:
                 "taken": datetime.now().isoformat(timespec="seconds"),
                 "png": base64.b64encode(result.stdout).decode()}
 
+    @staticmethod
+    def wait_for_lock(fd: int):
+        """Take the command lock, waiting at most COMMAND_LOCK_TIMEOUT.
+
+        The bound keeps every request within LONGEST_REQUEST, so the front
+        end never gives up on a change that is still being applied.
+        """
+        deadline = time.monotonic() + COMMAND_LOCK_TIMEOUT
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise RequestError(HTTPStatus.SERVICE_UNAVAILABLE,
+                                       "Another change is still being applied; try again")
+                time.sleep(0.2)
+
     def run_commands(self, request: dict) -> dict:
         """Run cmctl commands in order, stopping at the first that fails"""
         commands = request.get("commands")
@@ -411,7 +433,7 @@ class Broker:
         # without a lock, so commands from different requests take turns
         fd = os.open(self.command_lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.wait_for_lock(fd)
             for argv in argvs:
                 logger.info(f"Web UI client {client} ran: cmctl {' '.join(argv[2:])}")
                 try:

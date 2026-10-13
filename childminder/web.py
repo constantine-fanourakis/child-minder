@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from childminder import store
 from childminder import webauth
-from childminder.broker import BROKER_SOCKET
+from childminder.broker import BROKER_SOCKET, LONGEST_REQUEST
 
 WEB_CONFIG_PATH = "/etc/child-minder/web.json"
 
@@ -45,7 +45,9 @@ COOKIE_NAME = "cm_session"
 SESSION_SECONDS = 12 * 3600
 MAX_BODY_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
-BROKER_TIMEOUT = 120
+# Beyond the broker's own bound, so an answer is never abandoned while a
+# change is still being applied
+BROKER_TIMEOUT = LONGEST_REQUEST + 30
 
 SECURITY_HEADERS = {
     "Content-Security-Policy": ("default-src 'self'; img-src 'self' data: blob:; "
@@ -93,13 +95,14 @@ def socket_broker(path: str) -> Callable[[dict], dict]:
                 conn.connect(path)
                 conn.sendall(json.dumps(request).encode())
                 conn.shutdown(socket.SHUT_WR)
-                data = b""
-                while len(data) <= MAX_RESPONSE_BYTES:
+                chunks, size = [], 0
+                while size <= MAX_RESPONSE_BYTES:
                     chunk = conn.recv(1 << 20)
                     if not chunk:
                         break
-                    data += chunk
-            return json.loads(data)
+                    chunks.append(chunk)
+                    size += len(chunk)
+            return json.loads(b"".join(chunks))
         except (OSError, ValueError) as e:
             logger.warning(f"Broker request failed: {e}")
             return {"status": HTTPStatus.SERVICE_UNAVAILABLE,

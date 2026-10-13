@@ -415,6 +415,15 @@ class BrokerSocketTest(unittest.TestCase):
             response = web.socket_broker(self.path)({"op": "logs", "lines": 3})
         self.assertEqual(response, {"result": {"op": "logs", "lines": 3}})
 
+    def test_large_response_arrives_whole(self):
+        payload = "x" * (3 * 1024 * 1024)
+        self.broker = mock.Mock(handle=lambda request: {"result": payload})
+        self.serve_one()
+        own = mock.Mock(pw_uid=os.getuid())
+        with mock.patch.object(broker.pwd, "getpwnam", return_value=own):
+            response = web.socket_broker(self.path)({"op": "screenshot"})
+        self.assertEqual(response, {"result": payload})
+
     @unittest.skipIf(os.geteuid() == 0, "root is always allowed")
     def test_other_users_are_refused(self):
         self.serve_one()
@@ -524,6 +533,21 @@ class CommandTest(WebTestCase):
         self.run_mock.side_effect = fake_run
         self.post({"command": "reset"}, {"command": "enable"})
         self.assertEqual(held, [True, True])
+
+    def test_busy_command_lock_is_reported_without_running_anything(self):
+        fd = os.open(self.tmp / "broker.lock", os.O_RDWR | os.O_CREAT)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        with mock.patch.object(broker, "COMMAND_LOCK_TIMEOUT", 0.3):
+            status, _, body = self.post({"command": "reset"})
+        self.assertEqual(status, 503)
+        self.assertIn("still being applied", body["error"])
+        self.assertEqual(self.ran(), [])
+
+    def test_front_end_waits_longer_than_any_broker_request(self):
+        self.assertGreater(web.BROKER_TIMEOUT, broker.LONGEST_REQUEST)
+        self.assertGreaterEqual(broker.LONGEST_REQUEST,
+                                broker.MAX_BATCH * broker.COMMAND_TIMEOUT)
 
     def test_locking_is_limited_to_monitored_users(self):
         status, _, body = self.post({"command": "disable-user", "args": ["parent"]})
