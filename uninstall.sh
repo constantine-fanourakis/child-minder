@@ -67,11 +67,15 @@ systemctl disable child-minder 2>/dev/null || true
 echo "Checking for disabled users..."
 if [ -f /var/lib/child-minder/user_control.json ]; then
     echo "Re-enabling any disabled user accounts..."
+    # A failed re-enable must stop the uninstall: the account would stay
+    # expired while the files recording it are removed below.
     python3 -c "
 import json
 import os
 import subprocess
+import sys
 path = '/var/lib/child-minder/user_control.json'
+failures = []
 if os.path.exists(path):
     with open(path, 'r') as f:
         data = json.load(f)
@@ -79,9 +83,16 @@ if os.path.exists(path):
         print(f'Re-enabling user: {username}')
         # Clearing the expiry is what restores login; passwd -u is best effort
         # because it refuses to leave an account passwordless.
-        subprocess.run(['usermod', '--expiredate', '', username], capture_output=True)
-        subprocess.run(['passwd', '-u', username], capture_output=True)
-" 2>/dev/null || true
+        result = subprocess.run(['usermod', '--expiredate', '', username],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f'Failed to re-enable {username}: {result.stderr.strip()}',
+                  file=sys.stderr)
+            failures.append(username)
+        else:
+            subprocess.run(['passwd', '-u', username], capture_output=True)
+sys.exit(1 if failures else 0)
+"
 fi
 
 # Remove service file

@@ -26,10 +26,15 @@ if { [ -f /usr/lib/child-minder/child-minder.py ] || [ -f /usr/bin/child-minder.
     echo ""
 fi
 
+# The service runs /usr/bin/python3 (see child-minder.service), so every
+# interpreter check and build step here must use that same binary, not
+# whatever python3 happens to be first on root's PATH.
+PYTHON=/usr/bin/python3
+
 # Check Python version
 # 3.9 is the floor: dropping privileges for notification helpers uses the
 # user/group arguments to subprocess, added in that release.
-PYTHON_VERSION=$(python3 -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
+PYTHON_VERSION=$("$PYTHON" -c 'import sys; print(".".join(map(str, sys.version_info[:2])))')
 REQUIRED_VERSION="3.9"
 if [ "$(printf '%s\n' "$REQUIRED_VERSION" "$PYTHON_VERSION" | sort -V | head -n1)" != "$REQUIRED_VERSION" ]; then
     echo "Error: Python 3.9 or higher is required. Found: $PYTHON_VERSION"
@@ -46,7 +51,7 @@ fi
 # The distribution package is preferred: installing psutil with pip as root
 # shadows the packaged copy, and fails outright on PEP 668 systems.
 echo "Installing required Python packages..."
-if python3 -c "import psutil" 2>/dev/null; then
+if "$PYTHON" -c "import psutil" 2>/dev/null; then
     echo "psutil already available."
 elif command -v apt-get >/dev/null 2>&1; then
     apt-get update && apt-get install -y python3-psutil
@@ -64,7 +69,7 @@ else
     exit 1
 fi
 
-if ! python3 -c "import psutil" 2>/dev/null; then
+if ! "$PYTHON" -c "import psutil" 2>/dev/null; then
     echo "Error: psutil is still not importable after installation"
     exit 1
 fi
@@ -92,7 +97,11 @@ mkdir -p /var/lib/child-minder
 mkdir -p /var/log/child-minder
 
 # Check if all required files exist
-REQUIRED_FILES=("child-minder.py" "cmctl.py" "childminder/__init__.py" "config.json" "child-minder.service")
+REQUIRED_FILES=("child-minder.py" "cmctl.py"
+    "childminder/__init__.py" "childminder/accounts.py" "childminder/cli.py"
+    "childminder/config.py" "childminder/daemon.py" "childminder/policy.py"
+    "childminder/schedule.py" "childminder/store.py"
+    "config.json" "child-minder.service" "cmctl-completion.bash")
 for file in "${REQUIRED_FILES[@]}"; do
     if [ ! -f "$file" ]; then
         echo "Error: Required file '$file' not found in current directory"
@@ -117,7 +126,7 @@ mkdir -p "$LIB_DIR/childminder"
 install -m 755 child-minder.py cmctl.py "$LIB_DIR/"
 install -m 644 childminder/*.py "$LIB_DIR/childminder/"
 # The service cannot write bytecode under its read-only /usr, so it is built here
-python3 -m compileall -q "$LIB_DIR"
+"$PYTHON" -m compileall -q "$LIB_DIR"
 
 ln -sf "$LIB_DIR/cmctl.py" /usr/bin/cmctl
 ln -sf "$LIB_DIR/cmctl.py" /usr/bin/cmctl.py
@@ -149,7 +158,7 @@ else
 
     # A pattern without a glob character matches only a process name equal to
     # the whole pattern, so list those in case one was meant as a prefix.
-    python3 - /etc/child-minder/config.json <<'EOF' || true
+    "$PYTHON" - /etc/child-minder/config.json <<'EOF' || true
 import json, sys
 try:
     with open(sys.argv[1]) as f:

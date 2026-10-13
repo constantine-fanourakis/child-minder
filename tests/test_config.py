@@ -67,6 +67,29 @@ class ValidateTest(unittest.TestCase):
         config, _ = validate({"min_uid": 2000})
         self.assertEqual(config["min_uid"], 2000)
 
+    def test_non_finite_numbers_are_invalid(self):
+        config, _ = validate({"warning_time": float("nan"),
+                              "check_interval": float("inf"),
+                              "limited_processes": {"game": float("inf"), "ok": 5},
+                              "user_control": {"check_interval": float("nan")}})
+        self.assertEqual(config["warning_time"], 300)
+        self.assertEqual(config["check_interval"], 5)
+        self.assertEqual(config["limited_processes"], {"ok": 5})
+        self.assertEqual(config["user_control"]["check_interval"], 60)
+
+    def test_unusable_monitored_users_monitors_nobody(self):
+        # [] means "every regular user", so a bad value must not fall back to it
+        for bad in ("kid", 7, None, [7], ["kid", 7]):
+            config, warnings = validate({"monitored_users": bad})
+            if bad == ["kid", 7]:
+                self.assertEqual(config["monitored_users"], ["kid"])
+            else:
+                self.assertIsNone(config["monitored_users"], bad)
+            self.assertTrue(warnings, bad)
+        config, warnings = validate({"monitored_users": []})
+        self.assertEqual(config["monitored_users"], [])
+        self.assertEqual(warnings, [])
+
     def test_invalid_entries_are_dropped(self):
         config, _ = validate({
             "blocked_processes": ["fortnite*", 7],

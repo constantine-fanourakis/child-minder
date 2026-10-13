@@ -151,6 +151,27 @@ class ConfigCommandTest(CmctlTestCase):
         self.run_cmctl("remove-user", "kid")
         self.assertEqual(self.read_json(self.config_path)["monitored_users"], [])
 
+    def test_mutators_survive_wrong_typed_entries(self):
+        self.write_config({"blocked_processes": "steam"})
+        out = self.run_cmctl("block", "steam")
+        self.assertIn("Added 'steam'", out)
+        self.assertEqual(self.read_json(self.config_path)["blocked_processes"],
+                         ["steam"])
+
+        self.write_config({"blocked_processes": "steam"})
+        self.run_cmctl("block", "minecraft")
+        self.assertEqual(self.read_json(self.config_path)["blocked_processes"],
+                         ["minecraft"])
+
+    def test_user_limit_drops_only_the_invalid_day(self):
+        self.write_config({"user_daily_limits": {"kid": {"weekday": "x"}}})
+        out = self.run_cmctl("user-weekend-limit", "kid", "240")
+        self.assertIn("Set weekend", out)
+        self.assertEqual(self.read_json(self.config_path)["user_daily_limits"],
+                         {"kid": {"weekend": 240}})
+        self.assertNotIn("Ignoring invalid user_daily_limits",
+                         self.run_cmctl("config"))
+
     def test_enable_and_disable_monitoring(self):
         self.run_cmctl("disable")
         self.assertFalse(self.read_json(self.config_path)["enabled"])
@@ -212,6 +233,32 @@ class AccountCommandTest(CmctlTestCase):
         self.assertIn("system account", out)
         self.assertEqual(self.run_calls, [])
         self.assertFalse(self.user_control_path.exists())
+
+    def test_enable_system_account_is_refused(self):
+        out = self.run_cmctl("enable-user", "root")
+        self.assertIn("system account", out)
+        self.assertEqual(self.run_calls, [])
+        self.assertFalse(self.user_control_path.exists())
+
+    def test_enable_user_who_is_not_disabled_is_refused(self):
+        out = self.run_cmctl("enable-user", current_username())
+        self.assertIn("not disabled", out)
+        self.assertEqual(self.run_calls, [])
+
+    def test_enable_unknown_user_is_refused(self):
+        out = self.run_cmctl("enable-user", "no-such-user-cmtest")
+        self.assertIn("does not exist", out)
+        self.assertEqual(self.run_calls, [])
+
+    def test_unrunnable_lock_command_leaves_no_record(self):
+        def fake_run_result(argv):
+            if argv[0] == 'usermod':
+                raise FileNotFoundError("usermod missing")
+            return mock.Mock(returncode=0, stdout='', stderr='')
+        self.fake_run_result = fake_run_result
+        out = self.run_cmctl("disable-user", current_username())
+        self.assertIn("Failed to disable account", out)
+        self.assertEqual(self.read_json(self.user_control_path)["disabled_users"], {})
 
     def test_non_positive_duration_is_refused(self):
         for hours in ("0", "0.0", "-1", "nan", "inf"):

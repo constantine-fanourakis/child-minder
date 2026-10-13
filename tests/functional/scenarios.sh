@@ -231,7 +231,7 @@ cmctl disable-user kid -r functional >/dev/null
 check "uninstall.sh succeeds" test $? -eq 0
 check "uninstall re-enables disabled accounts" account_open
 check "service is gone" bash -c '! systemctl cat child-minder'
-check "files are removed" bash -c '! ls /usr/lib/child-minder /usr/bin/cmctl /usr/bin/cmctl.py'
+check "files are removed" bash -c 'test ! -e /usr/lib/child-minder && test ! -e /usr/bin/cmctl && test ! -e /usr/bin/cmctl.py'
 
 echo ""
 echo "${PASSED} passed, ${#FAILURES[@]} failed"

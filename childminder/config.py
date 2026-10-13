@@ -3,12 +3,15 @@
 validate() is the single definition of a usable configuration. It returns a
 canonical copy: every key present, every entry of the right type, and
 user_daily_limits entries always in {"weekday": m, "weekend": m} form, where
-either value may be None. A limit of 0 minutes means no time allowed.
+either value may be None. A limit of 0 minutes means no time allowed. The one
+exception to "right type" is monitored_users: an unusable value becomes None
+(monitors nobody), because its [] default means every regular user.
 """
 
 import copy
 import fnmatch
 import json
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -70,7 +73,8 @@ def read_uid_range(path: str = LOGIN_DEFS_PATH) -> Tuple[int, int]:
 
 
 def is_number(value) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
 
 
 def is_minutes(value) -> bool:
@@ -112,9 +116,24 @@ def validate(raw: dict, warn: Warn, uid_min: int) -> dict:
     base = defaults()
 
     for key, default_value in base.items():
+        if key == 'monitored_users':
+            continue  # handled below: its default means "every user"
         if not _same_kind(config.setdefault(key, default_value), default_value):
             warn(f"Invalid '{key}', using default")
             config[key] = default_value
+
+    # An empty monitored_users list deliberately means "every regular user",
+    # so an unusable value must not fall back to it: that would widen a typo
+    # to accounts the administrator never named. None monitors nobody.
+    raw_users = raw.get('monitored_users', [])
+    if isinstance(raw_users, list):
+        users = [u for u in raw_users if isinstance(u, str)]
+        if len(users) != len(raw_users):
+            warn("Ignoring non-string entries in 'monitored_users'")
+        config['monitored_users'] = users if users or not raw_users else None
+    else:
+        warn("Invalid 'monitored_users', monitoring no users")
+        config['monitored_users'] = None
 
     if config['check_interval'] <= 0:
         warn("Invalid check_interval, using default: 5")

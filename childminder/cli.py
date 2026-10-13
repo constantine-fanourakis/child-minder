@@ -31,8 +31,12 @@ SERVICE = "child-minder"
 READ_ONLY_COMMANDS = {"config", "usage", "status", "logs", "groups", "user-status"}
 
 
-def run_command(argv: list) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True)
+def run_command(argv: list):
+    """Run argv, returning None if it could not be run (the Runner contract)"""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True)
+    except OSError:
+        return None
 
 
 def _print_warning(message: str):
@@ -77,7 +81,44 @@ class ChildMinderManager:
             print("Error: Minutes must be zero or more (0 allows no time)")
             return False
         return True
-            
+
+    @staticmethod
+    def _list_entry(config: dict, key: str) -> list:
+        """Return config[key] as a list, replacing a wrong-typed value.
+
+        Mutating commands edit the config as written, so the entry they are
+        about to touch cannot be trusted to have its documented type.
+        """
+        value = config.get(key)
+        if not isinstance(value, list):
+            if key in config:
+                _print_warning(f"Ignoring invalid '{key}'; starting it empty")
+            config[key] = value = []
+        return value
+
+    @staticmethod
+    def _dict_entry(config: dict, key: str) -> dict:
+        """Return config[key] as a dict, replacing a wrong-typed value"""
+        value = config.get(key)
+        if not isinstance(value, dict):
+            if key in config:
+                _print_warning(f"Ignoring invalid '{key}'; starting it empty")
+            config[key] = value = {}
+        return value
+
+    def _regular_account_uid(self, username: str) -> Optional[int]:
+        """Return username's UID if it is a regular account, else report why not"""
+        try:
+            uid = pwd.getpwnam(username).pw_uid
+        except KeyError:
+            print(f"Error: User {username} does not exist")
+            return None
+        _, uid_max = cfg.read_uid_range()
+        if not self.effective_config()["min_uid"] <= uid <= uid_max:
+            print(f"Error: {username} is a system account and cannot be managed")
+            return None
+        return uid
+
     def save_config(self, config: dict):
         """Save configuration and ask the running service to pick it up"""
         try:
@@ -106,70 +147,72 @@ class ChildMinderManager:
     def add_blocked_process(self, process_name: str):
         """Add a process to the block list"""
         config = self.load_config()
-        if 'blocked_processes' not in config:
-            config['blocked_processes'] = []
-        if process_name not in config['blocked_processes']:
-            config['blocked_processes'].append(process_name)
+        blocked = self._list_entry(config, 'blocked_processes')
+        if process_name not in blocked:
+            blocked.append(process_name)
             self.save_config(config)
             print(f"Added '{process_name}' to blocked processes")
         else:
             print(f"'{process_name}' is already blocked")
-            
+
     def remove_blocked_process(self, process_name: str):
         """Remove a process from the block list"""
         config = self.load_config()
-        if process_name in config.get('blocked_processes', []):
-            config['blocked_processes'].remove(process_name)
+        blocked = self._list_entry(config, 'blocked_processes')
+        if process_name in blocked:
+            blocked.remove(process_name)
             self.save_config(config)
             print(f"Removed '{process_name}' from blocked processes")
         else:
             print(f"'{process_name}' is not in blocked processes")
-            
+
     def add_to_group(self, group_name: str, process_name: str):
         """Add a process to a group"""
         config = self.load_config()
-        if 'process_groups' not in config:
-            config['process_groups'] = {}
-        if group_name not in config['process_groups']:
-            config['process_groups'][group_name] = []
-        if process_name not in config['process_groups'][group_name]:
-            config['process_groups'][group_name].append(process_name)
+        groups = self._dict_entry(config, 'process_groups')
+        if not isinstance(groups.get(group_name), list):
+            if group_name in groups:
+                _print_warning(f"Ignoring invalid process group '{group_name}';"
+                               " starting it empty")
+            groups[group_name] = []
+        if process_name not in groups[group_name]:
+            groups[group_name].append(process_name)
             self.save_config(config)
             print(f"Added '{process_name}' to group '{group_name}'")
         else:
             print(f"'{process_name}' is already in group '{group_name}'")
-    
+
     def remove_from_group(self, group_name: str, process_name: str):
         """Remove a process from a group"""
         config = self.load_config()
-        if 'process_groups' in config and group_name in config['process_groups']:
-            if process_name in config['process_groups'][group_name]:
-                config['process_groups'][group_name].remove(process_name)
-                if not config['process_groups'][group_name]:
-                    del config['process_groups'][group_name]
-                self.save_config(config)
-                print(f"Removed '{process_name}' from group '{group_name}'")
-            else:
-                print(f"'{process_name}' is not in group '{group_name}'")
+        groups = self._dict_entry(config, 'process_groups')
+        members = groups.get(group_name)
+        if isinstance(members, list) and process_name in members:
+            members.remove(process_name)
+            if not members:
+                del groups[group_name]
+            self.save_config(config)
+            print(f"Removed '{process_name}' from group '{group_name}'")
+        elif isinstance(members, list):
+            print(f"'{process_name}' is not in group '{group_name}'")
         else:
             print(f"Group '{group_name}' does not exist")
-    
+
     def set_group_limit(self, group_name: str, minutes: int):
         """Set time limit for a group"""
         if not self._check_minutes(minutes):
             return
         config = self.load_config()
-        if 'group_limits' not in config:
-            config['group_limits'] = {}
-        config['group_limits'][group_name] = minutes
+        self._dict_entry(config, 'group_limits')[group_name] = minutes
         self.save_config(config)
         print(f"Set time limit for group '{group_name}' to {minutes} minutes")
-    
+
     def remove_group_limit(self, group_name: str):
         """Remove time limit for a group"""
         config = self.load_config()
-        if 'group_limits' in config and group_name in config['group_limits']:
-            del config['group_limits'][group_name]
+        limits = self._dict_entry(config, 'group_limits')
+        if group_name in limits:
+            del limits[group_name]
             self.save_config(config)
             print(f"Removed time limit for group '{group_name}'")
         else:
@@ -180,10 +223,23 @@ class ChildMinderManager:
         if not self._check_minutes(minutes):
             return
         config = self.load_config()
-        config.setdefault('user_daily_limits', {})
-        entry = config['user_daily_limits'].get(username, {})
-        if isinstance(entry, (int, float)):
-            entry = {"weekday": int(entry), "weekend": int(entry)}
+        limits = self._dict_entry(config, 'user_daily_limits')
+        entry = limits.get(username, {})
+        if cfg.is_minutes(entry):
+            entry = {"weekday": entry, "weekend": entry}
+        elif isinstance(entry, dict):
+            # A wrong-typed sibling day would make the daemon drop the whole
+            # entry, so drop only that day before setting the other one.
+            kept = {day: entry[day] for day in cfg.DAY_TYPES
+                    if cfg.is_minutes(entry.get(day))}
+            if len(kept) != sum(day in entry for day in cfg.DAY_TYPES):
+                _print_warning(f"Ignoring invalid daily limit values for '{username}'")
+            entry = kept
+        else:
+            if username in limits:
+                _print_warning(f"Ignoring invalid daily limit for '{username}';"
+                               " starting it empty")
+            entry = {}
         if day_type in ('weekday', 'both'):
             entry['weekday'] = minutes
         if day_type in ('weekend', 'both'):
@@ -198,8 +254,9 @@ class ChildMinderManager:
     def remove_user_daily_limit(self, username: str):
         """Remove overall daily screen time limit for a user"""
         config = self.load_config()
-        if username in config.get('user_daily_limits', {}):
-            del config['user_daily_limits'][username]
+        limits = self._dict_entry(config, 'user_daily_limits')
+        if username in limits:
+            del limits[username]
             self.save_config(config)
             print(f"Removed daily screen time limit for '{username}'")
         else:
@@ -228,17 +285,16 @@ class ChildMinderManager:
         if not self._check_minutes(minutes):
             return
         config = self.load_config()
-        if 'limited_processes' not in config:
-            config['limited_processes'] = {}
-        config['limited_processes'][process_name] = minutes
+        self._dict_entry(config, 'limited_processes')[process_name] = minutes
         self.save_config(config)
         print(f"Set time limit for '{process_name}' to {minutes} minutes")
 
     def remove_time_limit(self, process_name: str):
         """Remove time limit for a process"""
         config = self.load_config()
-        if process_name in config.get('limited_processes', {}):
-            del config['limited_processes'][process_name]
+        limits = self._dict_entry(config, 'limited_processes')
+        if process_name in limits:
+            del limits[process_name]
             self.save_config(config)
             print(f"Removed time limit for '{process_name}'")
         else:
@@ -247,20 +303,20 @@ class ChildMinderManager:
     def add_monitored_user(self, username: str):
         """Add a user to monitor"""
         config = self.load_config()
-        if 'monitored_users' not in config:
-            config['monitored_users'] = []
-        if username not in config['monitored_users']:
-            config['monitored_users'].append(username)
+        users = self._list_entry(config, 'monitored_users')
+        if username not in users:
+            users.append(username)
             self.save_config(config)
             print(f"Added '{username}' to monitored users")
         else:
             print(f"'{username}' is already monitored")
-            
+
     def remove_monitored_user(self, username: str):
         """Remove a user from monitoring"""
         config = self.load_config()
-        if username in config.get('monitored_users', []):
-            config['monitored_users'].remove(username)
+        users = self._list_entry(config, 'monitored_users')
+        if username in users:
+            users.remove(username)
             self.save_config(config)
             print(f"Removed '{username}' from monitored users")
         else:
@@ -272,7 +328,10 @@ class ChildMinderManager:
         print("\n=== Current Configuration ===")
         print(f"Enabled: {config.get('enabled', True)}")
         print(f"Check Interval: {config.get('check_interval', 5)} seconds")
-        print(f"\nMonitored Users: {', '.join(config.get('monitored_users', [])) or 'All users'}")
+        users = config.get('monitored_users', [])
+        users_text = ("None (invalid monitored_users)" if users is None
+                      else ', '.join(users) or 'All users')
+        print(f"\nMonitored Users: {users_text}")
         
         print(f"\nBlocked Processes:")
         for proc in config.get('blocked_processes', []):
@@ -465,8 +524,13 @@ class ChildMinderManager:
     
     def enable_user_account(self, username: str):
         """Enable a user account"""
+        if self._regular_account_uid(username) is None:
+            return
         try:
             with self._edit_user_control() as user_control:
+                if username not in user_control["disabled_users"]:
+                    print(f"Error: {username} is not disabled by Child Minder")
+                    return
                 error, note = accounts.unlock(username, run_command)
                 if error:
                     print(f"Error: Failed to enable account: {error}")

@@ -29,10 +29,12 @@ class FakeUids:
 class FakeProc:
     """Stand-in for psutil.Process exposing what the daemon reads"""
 
-    def __init__(self, pid: int, name: str, uid: int, ppid: int = 1):
+    def __init__(self, pid: int, name: str, uid: int, ppid: int = 1,
+                 status: str = "running"):
         self.pid = pid
         self._name = name
-        self.info = {'pid': pid, 'name': name, 'uids': FakeUids(uid), 'ppid': ppid}
+        self.info = {'pid': pid, 'name': name, 'uids': FakeUids(uid),
+                     'ppid': ppid, 'status': status}
 
     def name(self):
         return self._name

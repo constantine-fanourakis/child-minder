@@ -102,6 +102,11 @@ class UserSelectionTest(MinderTestCase):
         self.assertTrue(minder.should_monitor_user("kid", KID_UID))
         self.assertFalse(minder.should_monitor_user("parent", 1002))
 
+    def test_unusable_monitored_users_monitors_nobody(self):
+        minder = self.make_minder({"monitored_users": "kid"})
+        self.assertFalse(minder.should_monitor_user("kid", KID_UID))
+        self.assertFalse(minder.should_monitor_user("parent", 1002))
+
 
 class AccessHoursTest(MinderTestCase):
     def access_at(self, moment: datetime, schedule: dict) -> bool:
@@ -237,6 +242,15 @@ class MonitorPassTest(MinderTestCase):
         self.run_pass(minder, [FakeProc(10, "fortnite", 0)])
         self.assertEqual(self.terminated, [])
 
+    def test_zombie_processes_are_ignored(self):
+        minder = self.make_minder({"blocked_processes": ["fortnite*"],
+                                   "limited_processes": {"minecraft*": 60}})
+        self.run_pass(minder, [
+            FakeProc(10, "fortnite", KID_UID, status="zombie"),
+            FakeProc(11, "minecraft", KID_UID, status="zombie")])
+        self.assertEqual(self.terminated, [])
+        self.assertEqual(minder.usage.process_seconds("kid", "minecraft*"), 0)
+
     def test_own_children_are_protected(self):
         minder = self.make_minder({"blocked_processes": ["fortnite*"]})
         self.run_pass(minder, [FakeProc(10, "fortnite", KID_UID, ppid=child_minder.os.getpid())])
@@ -340,6 +354,19 @@ class RunLoopTest(MinderTestCase):
         self.run_once(minder)
         minder.monitor_processes.assert_called_once()
 
+    def test_wait_interval_wakes_when_reload_is_requested(self):
+        minder = self.make_minder()
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            minder.reload_requested = True
+
+        with mock.patch.object(child_minder.time, 'sleep', side_effect=sleep):
+            minder.wait_interval(300)
+        self.assertEqual(len(sleeps), 1)
+        self.assertLessEqual(sleeps[0], 1)
+
 
     def test_run_reports_ready_to_systemd(self):
         minder = self.make_minder()
@@ -386,6 +413,65 @@ class TerminalMessageTest(MinderTestCase):
         with mock.patch.object(child_minder.psutil, 'process_iter', return_value=procs):
             self.assertTrue(minder.write_to_user_terminals("kid", "hello"))
         self.assertEqual(tty.read_text().count("hello"), 1)
+
+    def test_unread_terminal_does_not_block(self):
+        # A FIFO with no reader: a blocking open would hang the daemon here
+        fifo = self.tmp / "fifo"
+        os.mkfifo(fifo)
+        procs = [mock.Mock(info={'username': "kid", 'terminal': str(fifo)})]
+        minder = self.make_minder()
+        with mock.patch.object(child_minder.psutil, 'process_iter', return_value=procs):
+            self.assertFalse(minder.write_to_user_terminals("kid", "hello"))
+
+
+class TerminateTest(MinderTestCase):
+    def test_process_alive_after_grace_is_killed(self):
+        minder = self.make_minder()
+        proc = mock.Mock(pid=10)
+        proc.name.return_value = "stubborn"
+        proc.username.return_value = "kid"
+        with mock.patch.object(child_minder.psutil, 'wait_procs',
+                               return_value=([], [proc])):
+            minder.terminate_processes([(proc, "Blocked application")])
+        proc.terminate.assert_called_once()
+        proc.kill.assert_called_once()
+
+    def test_process_gone_within_grace_is_not_killed(self):
+        minder = self.make_minder()
+        proc = mock.Mock(pid=10)
+        proc.name.return_value = "cooperative"
+        proc.username.return_value = "kid"
+        with mock.patch.object(child_minder.psutil, 'wait_procs',
+                               return_value=([proc], [])):
+            minder.terminate_processes([(proc, "Blocked application")])
+        proc.kill.assert_not_called()
+
+
+class NotificationTest(MinderTestCase):
+    def test_run_as_user_builds_session_environment(self):
+        minder = self.make_minder()
+        minder.get_user_display = mock.Mock(return_value=":99")
+        pw = mock.Mock(pw_uid=1001, pw_gid=1001, pw_dir="/home/kid")
+        with mock.patch.object(child_minder.pwd, 'getpwnam', return_value=pw), \
+                mock.patch.object(child_minder.subprocess, 'run',
+                                  return_value=mock.Mock(returncode=0)) as run:
+            result = minder.run_as_user("kid", ['notify-send', 'hi'])
+        self.assertEqual(result.returncode, 0)
+        env = run.call_args.kwargs['env']
+        self.assertEqual(env['DISPLAY'], ":99")
+        self.assertEqual(env['DBUS_SESSION_BUS_ADDRESS'],
+                         "unix:path=/run/user/1001/bus")
+        self.assertEqual(run.call_args.kwargs['user'], 1001)
+
+    def test_send_notification_reports_delivery(self):
+        minder = self.make_minder()
+        minder.run_as_user = mock.Mock(return_value=mock.Mock(returncode=0))
+        self.assertTrue(minder.send_notification("kid", "Title", "Message"))
+        self.assertEqual(minder.run_as_user.call_args.args[1][0], 'notify-send')
+        minder.run_as_user = mock.Mock(return_value=mock.Mock(returncode=1))
+        self.assertFalse(minder.send_notification("kid", "Title", "Message"))
+        minder.run_as_user = mock.Mock(return_value=None)
+        self.assertFalse(minder.send_notification("kid", "Title", "Message"))
 
 
 class EndSessionTest(MinderTestCase):

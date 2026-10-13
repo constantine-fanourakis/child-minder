@@ -113,6 +113,14 @@ else
     FAILED=$((FAILED + 1))
 fi
 
+# Test 11: Check the service is actually running (a loaded but dead unit
+# must not score as a healthy install)
+if test_feature "service is running" 'systemctl is-active --quiet child-minder'; then
+    PASSED=$((PASSED + 1))
+else
+    FAILED=$((FAILED + 1))
+fi
+
 echo ""
 echo "================================="
 echo -e "Test Results: ${GREEN}$PASSED passed${NC}, ${RED}$FAILED failed${NC}"
@@ -142,7 +150,7 @@ echo ""
 
 # Test configuration validity
 echo "Validating configuration file..."
-python3 -c "
+if ! python3 -c "
 import json
 import sys
 try:
@@ -161,4 +169,13 @@ try:
 except Exception as e:
     print(f'Error in configuration: {e}')
     sys.exit(1)
-" || echo -e "${RED}Configuration validation failed${NC}"
+"; then
+    echo -e "${RED}Configuration validation failed${NC}"
+    FAILED=$((FAILED + 1))
+fi
+
+if [ $FAILED -ne 0 ]; then
+    echo -e "${RED}$FAILED test(s) failed.${NC}"
+    exit 1
+fi
+exit 0

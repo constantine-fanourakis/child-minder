@@ -248,6 +248,8 @@ class ChildMinder:
         if not self.is_regular_account(uid):
             return False
         monitored_users = self.config.get("monitored_users", [])
+        if monitored_users is None:  # Invalid config value: monitor nobody
+            return False
         if not monitored_users:  # If empty, monitor all non-system users
             return True
         return username in monitored_users
@@ -329,8 +331,15 @@ class ChildMinder:
         written = False
         for terminal in terminals:
             try:
-                with open(terminal, 'w') as tty:
-                    tty.write(f"\n{message}\n\n")
+                # Non-blocking: a user who leaves a terminal's output queue
+                # full must not be able to stall the root daemon mid-pass.
+                fd = os.open(terminal, os.O_WRONLY | os.O_NONBLOCK)
+                try:
+                    data = f"\n{message}\n\n".encode()
+                    while data:
+                        data = data[os.write(fd, data):]
+                finally:
+                    os.close(fd)
                 written = True
             except OSError as e:
                 self.logger.debug(f"Could not write to {terminal}: {e}")
@@ -639,11 +648,14 @@ class ChildMinder:
     def scan_processes(self) -> List[policy.Process]:
         """List the running processes of monitored users"""
         processes = []
-        for proc in psutil.process_iter(['pid', 'name', 'uids', 'ppid']):
+        for proc in psutil.process_iter(['pid', 'name', 'uids', 'ppid', 'status']):
             info = proc.info
             uids, name = info['uids'], info['name']
             if uids is None or not name:
                 continue
+            if info.get('status') == psutil.STATUS_ZOMBIE:
+                continue  # Already dead; only its parent can reap it
+            
             username = self.get_username(uids.real)
             if not username or not self.should_monitor_user(username, uids.real):
                 continue
@@ -688,6 +700,20 @@ class ChildMinder:
 
         self.logger.info("===================")
 
+    def wait_interval(self, seconds: float):
+        """Sleep for seconds, waking promptly when a signal handler fires.
+
+        Signal handlers only set flags, and Python retries a plain
+        time.sleep() after them, so one long sleep would delay shutdown,
+        reload and reset by the whole check_interval.
+        """
+        deadline = time.monotonic() + seconds
+        while self.running and not self.reload_requested and not self.reset_requested:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, 1))
+
     def run(self):
         """Main monitoring loop"""
         self.logger.info("Child Minder started")
@@ -718,7 +744,7 @@ class ChildMinder:
                 now = time.monotonic()
                 if not self.config["enabled"]:
                     last_tick = now
-                    time.sleep(min(10, self.config['check_interval']))
+                    self.wait_interval(self.config['check_interval'])
                     continue
 
                 # Charge actual elapsed time rather than the configured interval,
@@ -737,7 +763,7 @@ class ChildMinder:
                     self.save_state()
                     last_save = now
 
-                time.sleep(self.config['check_interval'])
+                self.wait_interval(self.config['check_interval'])
 
             except Exception as e:
                 self.logger.exception(f"Error in main loop: {e}")
