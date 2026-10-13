@@ -65,29 +65,6 @@ systemctl disable child-minder-web child-minder-broker.socket 2>/dev/null || tru
 systemctl stop child-minder 2>/dev/null || true
 systemctl disable child-minder 2>/dev/null || true
 
-# Close the web UI port install.sh opened, in every zone that has it
-if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-    WEB_PORT=$(python3 - <<'EOF' 2>/dev/null || echo 8765
-import json
-try:
-    port = json.load(open("/etc/child-minder/web.json")).get("port", 8765)
-except (OSError, ValueError):
-    port = 8765
-print(port if isinstance(port, int) and not isinstance(port, bool) else 8765)
-EOF
-)
-    CLOSED=false
-    for zone in $(firewall-cmd --get-zones); do
-        if firewall-cmd --permanent --zone="$zone" --query-port="${WEB_PORT}/tcp" >/dev/null 2>&1; then
-            firewall-cmd --permanent --zone="$zone" --remove-port="${WEB_PORT}/tcp" >/dev/null || true
-            CLOSED=true
-        fi
-    done
-    if $CLOSED; then
-        echo "Closing web UI port ${WEB_PORT} in firewalld..."
-        firewall-cmd --reload >/dev/null || true
-    fi
-fi
 
 # Re-enable any disabled users
 echo "Checking for disabled users..."
@@ -171,6 +148,9 @@ fi
 
 echo ""
 echo -e "${GREEN}Child Minder has been uninstalled.${NC}"
+echo ""
+echo "If you opened the web UI port in a firewall, close it again, for example:"
+echo "  sudo firewall-cmd --permanent --zone=home --remove-port=8765/tcp && sudo firewall-cmd --reload"
 
 if [ -n "$BACKUP_DIR" ]; then
     echo ""

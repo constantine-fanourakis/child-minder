@@ -37,8 +37,10 @@ sudo cmctl web-password                     # Set the password first
 # Then browse to http://<computer's address>:8765/
 sudo systemctl status child-minder-web      # Web UI status
 sudo journalctl -u 'child-minder-broker@*'  # Changes made from the web UI
-# install.sh opens the port in firewalld; check it with:
-sudo firewall-cmd --list-ports --zone="$(firewall-cmd --get-default-zone)"
+# Open the port for the home network only (install.sh does not):
+sudo nmcli connection modify "<home network name>" connection.zone home
+sudo nmcli connection up "<home network name>"
+sudo firewall-cmd --permanent --zone=home --add-port=8765/tcp && sudo firewall-cmd --reload
 ```
 
 ## Configuration Management (`cmctl`)

@@ -240,25 +240,19 @@ echo "Web UI: http://<this computer's address>:${WEB_PORT}/"
 if ! "$PYTHON" -c 'import json, sys; sys.exit("password" not in json.load(open("/etc/child-minder/web.json")))' 2>/dev/null; then
     echo "  Set its password first: sudo cmctl web-password"
 fi
+# The installer does not open the port: a laptop's connections all land in
+# firewalld's default zone unless assigned, so a rule there would also expose
+# the UI on other networks. Only the administrator knows which one is home.
 if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
-    # A Wi-Fi interface is often in a zone other than the default one, so the
-    # port is opened in every active zone. Each line of --get-active-zones that
-    # starts a zone begins with its name; firewalld 2 may append " (default)".
-    ZONES=$(firewall-cmd --get-active-zones | awk '/^[^[:space:]]/ {print $1}')
-    [ -n "$ZONES" ] || ZONES=$(firewall-cmd --get-default-zone)
-    OPENED=""
-    for zone in $ZONES; do
-        if firewall-cmd --permanent --zone="$zone" --add-port="${WEB_PORT}/tcp" >/dev/null; then
-            OPENED="$OPENED $zone"
-        fi
-    done
-    if [ -n "$OPENED" ] && firewall-cmd --reload >/dev/null; then
-        echo "  Opened TCP port ${WEB_PORT} in firewalld zone(s):${OPENED}"
-    else
-        echo "  Warning: could not open TCP port ${WEB_PORT} in firewalld"
-    fi
+    echo "  firewalld is running. To reach the web UI from other devices on your"
+    echo "  home network only, put that connection in the home zone and open the"
+    echo "  port there:"
+    echo "    sudo nmcli connection modify \"<home network name>\" connection.zone home"
+    echo "    sudo nmcli connection up \"<home network name>\""
+    echo "    sudo firewall-cmd --permanent --zone=home --add-port=${WEB_PORT}/tcp"
+    echo "    sudo firewall-cmd --reload"
 else
-    echo "  firewalld is not running; if another firewall is active, allow TCP port ${WEB_PORT}."
+    echo "  If a firewall is active, allow TCP port ${WEB_PORT} from your home network."
 fi
 
 if $IS_UPDATE; then

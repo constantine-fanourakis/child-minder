@@ -398,9 +398,24 @@ sudo cmctl web-password
 ```
 
 Then open `http://<computer's address>:8765/` from a phone or computer on the
-same network. When firewalld is running, as on openSUSE, the installer opens
-the port in every active zone, and the uninstaller closes it again. With any
-other firewall, allow TCP port 8765 yourself.
+same network.
+
+The installer does not open the port in the firewall. firewalld applies rules
+per zone, and NetworkManager puts every connection in the default zone unless
+told otherwise, so a rule there would also expose the UI on any other network
+the computer joins. Open it for the home network only, by putting that
+connection in the `home` zone:
+
+```bash
+sudo nmcli connection modify "<home network name>" connection.zone home
+sudo nmcli connection up "<home network name>"
+sudo firewall-cmd --permanent --zone=home --add-port=8765/tcp
+sudo firewall-cmd --reload
+```
+
+`nmcli connection show` lists the connection names. The `home` zone also
+allows some services by default; `firewall-cmd --zone=home --list-services`
+shows which. With another firewall, allow TCP port 8765 from the home network.
 
 The **Today** tab shows each user's screen time against their limits, their
 access hours, and whether they are locked. From there you can lock a user for
@@ -458,8 +473,7 @@ settings:
 
 Set `"bind": "127.0.0.1"` to reach the UI only from this computer, for
 example through an SSH tunnel. Restart `child-minder-web` after changing
-either setting. A new port also needs opening in the firewall: run
-`install.sh` again, or `firewall-cmd` yourself.
+either setting. A new port also needs opening in the firewall.
 
 ### Screenshots
 
