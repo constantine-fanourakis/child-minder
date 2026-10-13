@@ -463,8 +463,11 @@ either setting. A new port also needs opening in the firewall: run
 
 ### Screenshots
 
-Screenshots need an X11 session and either ImageMagick (`import`) or
-`ffmpeg`. They do not work in Wayland sessions.
+Screenshots need an X11 session, and no other software: the broker reads the
+screen over the X11 protocol itself (`childminder/x11.py`), as the user who
+owns the display. They do not work in Wayland sessions, where the X server
+cannot read the screen. Displays with 24 or 32 bits per pixel are supported,
+which covers Xorg's usual depth 24.
 
 ## File Locations
 

@@ -13,6 +13,7 @@ Linux parental-control daemon (`child-minder`) + `cmctl` CLI. No build system, p
 - `childminder/web.py` — web UI front end (HTTP, login, sessions, CSRF), runs as the unprivileged `child-minder-web` user; `static/` holds the page (plain JS, no external resources, server data inserted with `textContent` only).
 - `childminder/broker.py` — root side of the web UI: one process per connection on `/run/child-minder-broker.sock` (`Accept=yes`), fixed operations only. Every change is a cmctl subcommand from `broker.COMMANDS`; don't give the broker its own editing logic or let the front end read root-only files.
 - `childminder/webauth.py` — scrypt password hashing shared by `cmctl web-password` and the front end.
+- `childminder/x11.py` — screen capture over the X11 protocol (GetImage + stdlib PNG encoder). The broker runs it as a script under `python3 -I`, as the display's owner, so it must import only the standard library; never call it in the root process, since its DISPLAY/XAUTHORITY come from the user.
 - `config.json` (repo copy is the installer default, with placeholder user `son_username`), `install.sh`, `uninstall.sh`, `child-minder.service`, `child-minder-web.service`, `child-minder-broker.socket`, `child-minder-broker@.service`, `cmctl-completion.bash`.
 
 ## Commands

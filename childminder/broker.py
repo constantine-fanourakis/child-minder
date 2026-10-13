@@ -24,7 +24,6 @@ import logging
 import os
 import pwd
 import re
-import shutil
 import socket
 import struct
 import subprocess
@@ -98,16 +97,10 @@ COMMAND_OPTIONS = {
 }
 SCREENSHOT_TIMEOUT = 20
 MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024
-# The display formats the daemon accepts for notifications
-DISPLAY_RE = re.compile(r'^[a-zA-Z0-9._-]*:[0-9]+(\.[0-9]+)?$')
-# X11 capture tools writing a PNG to stdout, tried in order; {display} is
-# replaced with the user's display
-SCREENSHOT_TOOLS = (
-    ("import", "-window", "root", "png:-"),
-    ("ffmpeg", "-loglevel", "error", "-f", "x11grab", "-i", "{display}",
-     "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"),
-)
-TOOL_PATH = "/usr/bin:/bin"
+# Local displays only: the capture connects to the display's Unix socket
+DISPLAY_RE = re.compile(r'^(unix)?:[0-9]+(\.[0-9]+)?$')
+# Run as a script under -I (see its docstring), as the display's owner
+X11_CAPTURE = Path(__file__).resolve().parent / "x11.py"
 
 # Commands whose first argument must be a monitored user, so the web
 # password cannot lock out an account the daemon does not watch
@@ -193,15 +186,6 @@ def find_x_session(uid: int, home: str) -> Optional[Tuple[str, str]]:
         if not xauthority.startswith("/") or any(ord(c) < 32 for c in xauthority):
             xauthority = os.path.join(home, ".Xauthority")
         return display, xauthority
-    return None
-
-
-def screenshot_argv(display: str) -> Optional[list]:
-    """The first available capture tool's argv, with its absolute path"""
-    for tool in SCREENSHOT_TOOLS:
-        path = shutil.which(tool[0], path=TOOL_PATH)
-        if path:
-            return [path] + [arg.format(display=display) for arg in tool[1:]]
     return None
 
 
@@ -357,8 +341,9 @@ class Broker:
     def screenshot(self, request: dict) -> dict:
         """Capture a monitored user's X11 screen as a base64 PNG.
 
-        The capture tool runs as that user, which is what their X server's
-        authorization allows, with an environment set here rather than theirs.
+        childminder/x11.py runs as that user, with an environment set here
+        rather than theirs: DISPLAY and XAUTHORITY come from the user's own
+        processes, so only the user may act on them.
         """
         username = request.get("user")
         check_value("text", username, "user")
@@ -377,16 +362,13 @@ class Broker:
         if session is None:
             raise RequestError(HTTPStatus.NOT_FOUND, f"{username} has no X11 session")
         display, xauthority = session
-        argv = screenshot_argv(display)
-        if argv is None:
-            raise RequestError(HTTPStatus.SERVICE_UNAVAILABLE,
-                               "No screenshot tool found; install ImageMagick")
+        argv = [sys.executable, "-I", str(X11_CAPTURE), display, xauthority]
 
         client = request.get("client")
         logger.info(f"Web UI client {client if isinstance(client, str) else 'unknown'} "
                     f"took a screenshot of {username} on {display}")
-        env = {"DISPLAY": display, "XAUTHORITY": xauthority, "HOME": pw.pw_dir,
-               "USER": username, "LOGNAME": username, "PATH": TOOL_PATH}
+        env = {"HOME": pw.pw_dir, "USER": username, "LOGNAME": username,
+               "PATH": "/usr/bin:/bin"}
         try:
             result = subprocess.run(argv, user=pw.pw_uid, group=pw.pw_gid, extra_groups=[],
                                     env=env, cwd="/", stdin=subprocess.DEVNULL,

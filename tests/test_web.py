@@ -597,8 +597,6 @@ class ScreenshotTest(unittest.TestCase):
                 (broker.pwd, "getpwnam", {"return_value": self.kid}),
                 (broker, "find_x_session",
                  {"return_value": (":0", "/home/kid/.Xauthority")}),
-                (broker.shutil, "which",
-                 {"side_effect": lambda name, path: f"/usr/bin/{name}"}),
                 (broker.subprocess, "run",
                  {"return_value": mock.Mock(returncode=0, stdout=self.PNG, stderr=b"")})):
             patcher = mock.patch.object(target, name, **kwargs)
@@ -616,21 +614,14 @@ class ScreenshotTest(unittest.TestCase):
         self.assertEqual(response["result"]["display"], ":0")
         argv = self.run_mock.call_args.args[0]
         kwargs = self.run_mock.call_args.kwargs
-        self.assertEqual(argv, ["/usr/bin/import", "-window", "root", "png:-"])
+        self.assertEqual(argv, [broker.sys.executable, "-I", str(broker.X11_CAPTURE),
+                                ":0", "/home/kid/.Xauthority"])
+        self.assertTrue(broker.X11_CAPTURE.is_file())
         self.assertEqual((kwargs["user"], kwargs["group"], kwargs["extra_groups"]),
                          (1001, 1001, []))
-        self.assertEqual(kwargs["env"]["DISPLAY"], ":0")
-        self.assertEqual(kwargs["env"]["XAUTHORITY"], "/home/kid/.Xauthority")
-        self.assertEqual(kwargs["env"]["PATH"], broker.TOOL_PATH)
+        self.assertEqual(kwargs["env"]["HOME"], "/home/kid")
+        self.assertNotIn("PYTHONPATH", kwargs["env"])
         self.assertIn("10.0.0.2 took a screenshot of kid", "\n".join(logs.output))
-
-    def test_next_tool_is_used_when_the_first_is_missing(self):
-        self.which_mock.side_effect = lambda name, path: (
-            None if name == "import" else f"/usr/bin/{name}")
-        self.shoot()
-        argv = self.run_mock.call_args.args[0]
-        self.assertEqual(argv[0], "/usr/bin/ffmpeg")
-        self.assertIn(":0", argv)
 
     def test_refusals(self):
         cases = (
@@ -639,7 +630,6 @@ class ScreenshotTest(unittest.TestCase):
             ("kid", lambda: setattr(self.getpwnam_mock, "side_effect", KeyError), 404),
             ("kid", lambda: setattr(self.kid, "pw_uid", 0), 403),
             ("kid", lambda: setattr(self.find_x_session_mock, "return_value", None), 404),
-            ("kid", lambda: setattr(self.which_mock, "side_effect", lambda n, path: None), 503),
         )
         for user, arrange, status in cases:
             with self.subTest(user=user, status=status):
@@ -651,10 +641,10 @@ class ScreenshotTest(unittest.TestCase):
 
     def test_failed_capture_is_reported(self):
         self.run_mock.return_value = mock.Mock(returncode=1, stdout=b"",
-                                               stderr=b"unable to open X server")
+                                               stderr=b"Cannot connect to X display :0\n")
         response = self.shoot()
         self.assertEqual(response["status"], 502)
-        self.assertIn("unable to open X server", response["error"])
+        self.assertEqual(response["error"], "Screenshot failed: Cannot connect to X display :0")
 
     def test_output_that_is_not_a_png_is_refused(self):
         self.run_mock.return_value = mock.Mock(returncode=0, stdout=b"GIF89a", stderr=b"")
@@ -683,6 +673,7 @@ class FindXSessionTest(unittest.TestCase):
                 self.assertEqual(broker.find_x_session(1001, "/home/kid"),
                                  (":0", "/home/kid/.Xauthority"))
 
-    def test_invalid_display_is_skipped(self):
-        with self.processes((1001, {"DISPLAY": ":0; rm -rf /"}), (1001, {"DISPLAY": "wayland"})):
+    def test_invalid_or_remote_display_is_skipped(self):
+        with self.processes((1001, {"DISPLAY": ":0; x"}), (1001, {"DISPLAY": "wayland"}),
+                            (1001, {"DISPLAY": "host:0"})):
             self.assertIsNone(broker.find_x_session(1001, "/home/kid"))

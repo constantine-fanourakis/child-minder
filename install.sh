@@ -101,7 +101,7 @@ REQUIRED_FILES=("child-minder.py" "cmctl.py" "child-minder-web.py" "child-minder
     "childminder/__init__.py" "childminder/accounts.py" "childminder/broker.py"
     "childminder/cli.py" "childminder/config.py" "childminder/daemon.py"
     "childminder/policy.py" "childminder/schedule.py" "childminder/store.py"
-    "childminder/web.py" "childminder/webauth.py"
+    "childminder/web.py" "childminder/webauth.py" "childminder/x11.py"
     "childminder/static/index.html" "childminder/static/app.js" "childminder/static/style.css"
     "config.json" "child-minder.service" "child-minder-web.service"
     "child-minder-broker.socket" "child-minder-broker@.service" "cmctl-completion.bash")
