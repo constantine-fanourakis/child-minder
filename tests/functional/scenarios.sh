@@ -183,7 +183,9 @@ cmctl disable-user kid -t 0.005 -r functional >/dev/null
 check "account is expired while disabled" account_expired
 mark
 check "daemon re-enables the account when the time is up" wait_for 60 account_open
-check "password lock is lifted" password_unlocked
+# The expiry is cleared before passwd -u runs, so the account can show open
+# a moment before the password lock is lifted
+check "password lock is lifted" wait_for 10 password_unlocked
 check "re-enable ran through systemd-run" \
     bash -c 'journalctl --no-pager -o cat | grep -q "child-minder account change"'
 
