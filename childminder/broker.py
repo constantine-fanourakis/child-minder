@@ -158,17 +158,6 @@ def command_argv(request) -> list:
     return argv
 
 
-def is_monitored(config: dict, username: str) -> bool:
-    """Whether the daemon watches username, by the validated monitored_users.
-
-    An empty list means every regular account; cmctl refuses the others.
-    """
-    users = config["monitored_users"]
-    if users is None:
-        return False
-    return not users or username in users
-
-
 def find_x_session(uid: int, home: str) -> Optional[Tuple[str, str]]:
     """Return (DISPLAY, XAUTHORITY) from one of uid's processes, or None.
 
@@ -266,7 +255,7 @@ class Broker:
         else:
             _, uid_max = cfg.read_uid_range()
             names = sorted(p.pw_name for p in pwd.getpwall()
-                           if config["min_uid"] <= p.pw_uid <= uid_max)
+                           if cfg.is_regular_uid(config, p.pw_uid, uid_max))
         for extra in (usage.daily, usage.processes, usage.groups,
                       user_control["disabled_users"], user_control["daily_schedules"],
                       config["user_daily_limits"]):
@@ -348,14 +337,14 @@ class Broker:
         username = request.get("user")
         check_value("text", username, "user")
         config = self.effective_config([])
-        if not is_monitored(config, username):
+        if not cfg.monitors(config, username):
             raise RequestError(HTTPStatus.FORBIDDEN, f"{username} is not a monitored user")
         try:
             pw = pwd.getpwnam(username)
         except KeyError:
             raise RequestError(HTTPStatus.NOT_FOUND, f"User {username} does not exist")
         _, uid_max = cfg.read_uid_range()
-        if not config["min_uid"] <= pw.pw_uid <= uid_max:
+        if not cfg.is_regular_uid(config, pw.pw_uid, uid_max):
             raise RequestError(HTTPStatus.FORBIDDEN, f"{username} is a system account")
 
         session = find_x_session(pw.pw_uid, pw.pw_dir)
@@ -400,7 +389,7 @@ class Broker:
         if account_users:
             config = self.effective_config([])
             for user in account_users:
-                if not is_monitored(config, user):
+                if not cfg.monitors(config, user):
                     raise RequestError(HTTPStatus.FORBIDDEN,
                                        f"{user} is not a monitored user")
 

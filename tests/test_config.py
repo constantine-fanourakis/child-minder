@@ -174,3 +174,23 @@ class UserDailyLimitTest(unittest.TestCase):
         self.assertEqual(cfg.user_daily_limit(config, "kid", WEEKDAY), 0)
         self.assertEqual(cfg.user_daily_limit(config, "kid", WEEKEND), 120)
         self.assertIsNone(cfg.user_daily_limit(config, "other", WEEKDAY))
+
+
+class AccountScopeTest(unittest.TestCase):
+    def test_regular_uid_runs_from_min_uid_to_uid_max(self):
+        config, _ = validate({"min_uid": 1000})
+        self.assertFalse(cfg.is_regular_uid(config, 0, 60000))
+        self.assertTrue(cfg.is_regular_uid(config, 1000, 60000))
+        self.assertTrue(cfg.is_regular_uid(config, 60000, 60000))
+        self.assertFalse(cfg.is_regular_uid(config, 65534, 60000))
+
+    def test_monitors_by_name(self):
+        config, _ = validate({"monitored_users": ["kid"]})
+        self.assertTrue(cfg.monitors(config, "kid"))
+        self.assertFalse(cfg.monitors(config, "parent"))
+
+    def test_empty_list_monitors_everyone_and_invalid_monitors_nobody(self):
+        config, _ = validate({"monitored_users": []})
+        self.assertTrue(cfg.monitors(config, "parent"))
+        config, _ = validate({"monitored_users": "kid"})
+        self.assertFalse(cfg.monitors(config, "kid"))

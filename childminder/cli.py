@@ -119,7 +119,7 @@ class ChildMinderManager:
             print(f"Error: User {username} does not exist")
             return None
         _, uid_max = cfg.read_uid_range()
-        if not self.effective_config()["min_uid"] <= uid <= uid_max:
+        if not cfg.is_regular_uid(self.effective_config(), uid, uid_max):
             print(f"Error: {username} is a system account and cannot be managed")
             return None
         return uid
@@ -493,16 +493,9 @@ class ChildMinderManager:
             print("Error: Duration must be a positive number of hours")
             return False
         try:
-            try:
-                uid = pwd.getpwnam(username).pw_uid
-            except KeyError:
-                print(f"Error: User {username} does not exist")
-                return False
             # The daemon never acts on system accounts, and expiring one such
             # as root can lock the administrator out.
-            _, uid_max = cfg.read_uid_range()
-            if not self.effective_config()["min_uid"] <= uid <= uid_max:
-                print(f"Error: {username} is a system account and cannot be disabled")
+            if self._regular_account_uid(username) is None:
                 return False
 
             disable_info = {

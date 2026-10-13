@@ -233,6 +233,27 @@ def match_pattern(patterns, process_name: str) -> Optional[str]:
     return None
 
 
+def is_regular_uid(config: dict, uid: int, uid_max: int) -> bool:
+    """Whether uid is a regular account, from min_uid to UID_MAX.
+
+    validate() keeps min_uid at or above UID_MIN. Nothing done as root may
+    target any other account: a disabled root would have every root process
+    killed, and accounts above UID_MAX are system accounts as well.
+    """
+    return config["min_uid"] <= uid <= uid_max
+
+
+def monitors(config: dict, username: str) -> bool:
+    """Whether a validated config's monitored_users covers username.
+
+    This decides only by name; is_regular_uid must also hold.
+    """
+    users = config["monitored_users"]
+    if users is None:  # An invalid value monitors nobody
+        return False
+    return not users or username in users  # Empty means every regular account
+
+
 def day_type(moment: datetime) -> str:
     """Return "weekend" for Saturday and Sunday, "weekday" otherwise"""
     return "weekend" if moment.weekday() >= 5 else "weekday"

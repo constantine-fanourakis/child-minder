@@ -232,27 +232,12 @@ class ChildMinder:
             return None
             
     def is_regular_account(self, uid: int) -> bool:
-        """Check that uid is a regular user, between min_uid and UID_MAX.
-
-        Config validation keeps min_uid at or above UID_MIN.
-
-        Nothing the daemon does as root may target any other account: an
-        empty monitored_users list means "every human user", not "init and
-        the kernel threads too", and a disabled root would have every root
-        process killed. Accounts above UID_MAX are system accounts as well.
-        """
-        return self.config["min_uid"] <= uid <= self.uid_max
+        """Check that uid is a regular user (see config.is_regular_uid)"""
+        return cfg.is_regular_uid(self.config, uid, self.uid_max)
 
     def should_monitor_user(self, username: str, uid: int) -> bool:
         """Check if user should be monitored; system accounts never are"""
-        if not self.is_regular_account(uid):
-            return False
-        monitored_users = self.config.get("monitored_users", [])
-        if monitored_users is None:  # Invalid config value: monitor nobody
-            return False
-        if not monitored_users:  # If empty, monitor all non-system users
-            return True
-        return username in monitored_users
+        return self.is_regular_account(uid) and cfg.monitors(self.config, username)
 
     @staticmethod
     def is_protected_process(pid: int, ppid: Optional[int]) -> bool:
