@@ -77,6 +77,9 @@ sudo cmctl user-weekend-unlimit johnny     # Remove only the weekend limit
 sudo cmctl user-unlimit johnny             # Remove all daily limits for user
 ```
 
+Daily screen time is recorded even without a daily limit. Adding a limit later
+includes today's already-recorded usage; simultaneous tracked apps count once.
+
 ### Group Management
 ```bash
 # Create/modify groups

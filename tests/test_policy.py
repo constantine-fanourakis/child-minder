@@ -111,10 +111,33 @@ class EvaluateTest(unittest.TestCase):
         raised = self.evaluate({"limited_processes": {"minecraft*": 61}}, [proc("minecraft")], usage)
         self.assertEqual(len(raised.warnings), 1)
 
-    def test_group_only_process_is_charged_to_its_group_alone(self):
+    def test_group_only_process_charges_group_and_daily_but_not_process_usage(self):
         self.evaluate({"process_groups": {"media": ["mpv"]}}, [proc("mpv")])
         self.assertEqual(self.usage.groups, {"kid": {"media": 5}})
         self.assertEqual(self.usage.processes, {})
+        self.assertEqual(self.usage.daily, {"kid": 5})
+
+    def test_daily_usage_is_charged_once_without_a_daily_limit(self):
+        actions = self.evaluate({"monitored_processes": ["firefox*", "code"]},
+                                [proc("firefox"), proc("firefox-helper"), proc("code")],
+                                elapsed=600)
+        self.assertEqual(self.usage.daily_seconds("kid"), 600)
+        self.assertEqual(actions, policy.Actions())
+
+    def test_daily_usage_is_charged_on_an_unlimited_day_type(self):
+        actions = self.evaluate({"monitored_processes": ["code"],
+                                 "user_daily_limits": {"kid": {"weekend": 60}}},
+                                [proc("code")], elapsed=600)
+        self.assertEqual(self.usage.daily_seconds("kid"), 600)
+        self.assertEqual(actions, policy.Actions())
+
+    def test_limit_added_later_includes_earlier_usage(self):
+        config = {"monitored_processes": ["code"]}
+        self.evaluate(config, [proc("code")], elapsed=600)
+        config["user_daily_limits"] = {"kid": 10}
+        actions = self.evaluate(config, [proc("code")], self.usage)
+        self.assertEqual(actions.end_sessions,
+                         [("kid", "daily screen time limit reached (10 minutes)")])
 
     def test_blocked_process_is_terminated_unless_protected(self):
         actions = self.evaluate({"blocked_processes": ["fortnite*"]},

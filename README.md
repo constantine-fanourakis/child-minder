@@ -118,8 +118,10 @@ Either a plain number of minutes, or separate weekday and weekend allowances:
 ```
 
 Screen time accrues while the user runs anything listed in `limited_processes`,
-`monitored_processes`, or a process group. When the allowance runs out the
-user's session is closed.
+`monitored_processes`, or a process group, even when no daily limit is set.
+Applications running at the same time count once toward the user's total.
+Adding a daily limit later in the day includes the time already recorded.
+When the allowance runs out the user's session is closed.
 
 ### Process patterns
 

@@ -279,10 +279,12 @@ def evaluate(processes: List[Process], config: dict, usage: Usage,
                 (proc.handle, f"Group '{group}' daily limit exceeded ({minutes:.0f} minutes)"))
 
     for username in sorted(active_users):
+        # Track screen time even on unlimited days, so a limit added later
+        # applies to the time already used and the dashboard stays accurate.
+        usage.charge_daily(username, elapsed)
         limit = daily_limit(config, username, now)
         if limit is None:
             continue
-        usage.charge_daily(username, elapsed)
         remaining = limit - usage.daily_seconds(username)
         if remaining <= 0:
             actions.end_sessions.append(
