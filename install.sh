@@ -92,9 +92,10 @@ fi
 
 # Create directories
 echo "Creating directories..."
-mkdir -p /etc/child-minder
-mkdir -p /var/lib/child-minder
-mkdir -p /var/log/child-minder
+# The web user must traverse the config directory to read its 0640 web.json,
+# even when the administrator installs with a restrictive umask.
+install -d -m 755 /etc/child-minder
+install -d -m 700 /var/lib/child-minder /var/log/child-minder
 
 # Check if all required files exist
 REQUIRED_FILES=("child-minder.py" "cmctl.py" "child-minder-web.py" "child-minder-broker.py"
@@ -125,13 +126,14 @@ echo "Copying files..."
 # Python resolves the /usr/bin symlinks and finds the package beside them.
 LIB_DIR=/usr/lib/child-minder
 rm -rf "$LIB_DIR"
-mkdir -p "$LIB_DIR/childminder"
+install -d -m 755 "$LIB_DIR" "$LIB_DIR/childminder"
 install -m 755 child-minder.py cmctl.py child-minder-web.py child-minder-broker.py "$LIB_DIR/"
 install -m 644 childminder/*.py "$LIB_DIR/childminder/"
 install -d -m 755 "$LIB_DIR/childminder/static"
 install -m 644 childminder/static/* "$LIB_DIR/childminder/static/"
-# The service cannot write bytecode under its read-only /usr, so it is built here
-"$PYTHON" -m compileall -q "$LIB_DIR"
+# The services cannot write bytecode under read-only /usr. The web user must
+# read the precompiled files as well as the source, whatever the installer's umask.
+(umask 022; "$PYTHON" -m compileall -q "$LIB_DIR")
 
 ln -sf "$LIB_DIR/cmctl.py" /usr/bin/cmctl
 ln -sf "$LIB_DIR/cmctl.py" /usr/bin/cmctl.py

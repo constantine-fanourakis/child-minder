@@ -105,7 +105,8 @@ EOF
     systemctl start child-minder
 fi
 
-(cd /root/new && bash install.sh >/tmp/install.log 2>&1)
+# Fresh installs and updates must not inherit root-only runtime directories.
+(cd /root/new && umask 077 && bash install.sh >/tmp/install.log 2>&1)
 check "install.sh succeeds" test $? -eq 0
 check "service is running after install" wait_for 10 service_active
 check "package installed under /usr/lib/child-minder" \
@@ -113,6 +114,11 @@ check "package installed under /usr/lib/child-minder" \
 check "cmctl is a symlink into /usr/lib" \
     test "$(readlink /usr/bin/cmctl)" = /usr/lib/child-minder/cmctl.py
 check "no daemon left in /usr/bin" test ! -e /usr/bin/child-minder.py
+check "web user can traverse installed directories under umask 077" \
+    su -s /bin/sh child-minder-web -c 'test -r /usr/lib/child-minder/child-minder-web.py && test -r /usr/lib/child-minder/childminder/web.py && test -x /etc/child-minder'
+WEB_PYC=$(find /usr/lib/child-minder/childminder/__pycache__ -name 'web.*.pyc' -print -quit)
+check "web user can read precompiled bytecode under umask 077" \
+    su -s /bin/sh child-minder-web -c "test -r '$WEB_PYC'"
 if [ -n "${FROM_REV:-}" ]; then
     check "update path taken" grep -q "performing update" /tmp/install.log
     # Some releases also copy the window to an empty weekend, which shows it
