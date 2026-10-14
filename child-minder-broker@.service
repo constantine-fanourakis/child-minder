@@ -1,5 +1,8 @@
 [Unit]
 Description=Child Minder - web UI broker request
+# Closing or restarting the listener must also stop accepted requests and
+# their cmctl children, rather than leaving account changes running behind it.
+PartOf=child-minder-broker.socket
 
 [Service]
 # Runs as root without ProtectSystem or PrivateTmp: it runs cmctl, which

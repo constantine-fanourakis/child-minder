@@ -60,9 +60,25 @@ echo "Starting uninstallation..."
 
 # Stop and disable services
 echo "Stopping services..."
-systemctl stop child-minder-web child-minder-broker.socket 2>/dev/null || true
+
+stop_unit_if_present() {
+    local load_state
+    # Older installs may not have the web units. Only a missing unit is
+    # harmless: a real stop failure must abort before accounts or data change.
+    load_state=$(systemctl show --property=LoadState --value "$1") \
+        || [ "$load_state" = not-found ]
+    if [ "$load_state" != not-found ]; then
+        systemctl stop "$1"
+    fi
+}
+
+stop_unit_if_present child-minder-web.service
+stop_unit_if_present child-minder-broker.socket
+# Accept=yes instances are independent services. Stop them explicitly too,
+# for installs whose broker template predates PartOf= on the socket.
+systemctl stop 'child-minder-broker@*.service'
+stop_unit_if_present child-minder.service
 systemctl disable child-minder-web child-minder-broker.socket 2>/dev/null || true
-systemctl stop child-minder 2>/dev/null || true
 systemctl disable child-minder 2>/dev/null || true
 
 

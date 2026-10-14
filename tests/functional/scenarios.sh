@@ -81,6 +81,38 @@ web() {
 web_field() { python3 -c "import json; print(json.load(open('/tmp/web.out'))$1)"; }
 web_up() { curl -s -o /dev/null "$WEB/"; }
 
+# Keep a real accepted broker request alive without letting it change an
+# account: the client holds the command lock until the broker is stopped.
+queue_broker_request() {
+    python3 - <<'EOF' >/tmp/broker-pending.out 2>&1 &
+import fcntl, json, os, socket
+fd = os.open('/run/child-minder-broker.lock', os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+    conn.settimeout(120)
+    conn.connect('/run/child-minder-broker.sock')
+    conn.sendall(json.dumps({'op': 'commands', 'commands': [
+        {'command': 'disable-user', 'args': ['kid']}]}).encode())
+    conn.shutdown(socket.SHUT_WR)
+    try:
+        conn.recv(1024)
+    except OSError:
+        pass
+os.close(fd)
+EOF
+    BROKER_CLIENT_PID=$!
+}
+
+broker_requests_active() {
+    systemctl list-units --state=active --plain --no-legend \
+        'child-minder-broker@*.service' | grep -q .
+}
+broker_requests_stopped() { ! broker_requests_active; }
+cleanup_broker_client() {
+    kill "$BROKER_CLIENT_PID" 2>/dev/null || true
+    wait "$BROKER_CLIENT_PID" 2>/dev/null || true
+}
+
 useradd -m -u 1001 kid
 echo kid:password | chpasswd
 
@@ -266,6 +298,12 @@ cp /root/config.good "$CONFIG"
 check "config reload" reload_and_wait
 
 echo "== Web UI"
+queue_broker_request
+check "broker request is active before stopping the socket" wait_for 5 broker_requests_active
+systemctl stop child-minder-broker.socket
+check "stopping the socket also stops accepted requests" broker_requests_stopped
+cleanup_broker_client
+systemctl start child-minder-broker.socket child-minder-web.service
 check "web UI is running" wait_for 15 web_up
 check "broker socket is listening" systemctl is-active --quiet child-minder-broker.socket
 WEB_PID=$(systemctl show -p MainPID --value child-minder-web)
@@ -318,8 +356,17 @@ check "session is gone after logout" test "$(web GET /api/overview)" = 401
 
 echo "== Uninstall"
 cmctl disable-user kid -r functional >/dev/null
+# Exercise upgrades from the old template too: no PartOf= propagation, so
+# uninstall must explicitly stop accepted requests before restoring accounts.
+mkdir -p /run/systemd/system/child-minder-broker@.service.d
+printf '[Unit]\nPartOf=\n' > /run/systemd/system/child-minder-broker@.service.d/legacy.conf
+systemctl daemon-reload
+queue_broker_request
+check "legacy broker request is active before uninstall" wait_for 5 broker_requests_active
 (cd /root/new && printf 'y\nn\nn\n' | bash uninstall.sh >/tmp/uninstall.log 2>&1)
 check "uninstall.sh succeeds" test $? -eq 0
+check "uninstall stops accepted legacy broker requests" broker_requests_stopped
+cleanup_broker_client
 check "uninstall re-enables disabled accounts" account_open
 check "service is gone" bash -c '! systemctl cat child-minder'
 check "files are removed" bash -c 'test ! -e /usr/lib/child-minder && test ! -e /usr/bin/cmctl && test ! -e /usr/bin/cmctl.py'
