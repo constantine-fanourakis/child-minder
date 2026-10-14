@@ -40,6 +40,12 @@ class AtomicWriteTest(StoreTestCase):
 
 
 class ReadJsonTest(StoreTestCase):
+    def test_invalid_encoding_is_a_store_error(self):
+        path = self.tmp / "data.json"
+        path.write_bytes(b'{"reason": "caf\xe9"}')
+        with self.assertRaises(store.StoreError):
+            store.read_json(path)
+
     def test_missing_file_is_none_and_bad_content_raises(self):
         path = self.tmp / "data.json"
         self.assertIsNone(store.read_json(path))

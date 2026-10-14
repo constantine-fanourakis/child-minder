@@ -63,6 +63,23 @@ class ConfigTest(MinderTestCase):
         minder = self.make_minder()
         self.assertEqual(minder.config["blocked_processes"], ["x"])
 
+    def test_invalid_encoding_falls_back_to_last_good(self):
+        self.make_minder({"blocked_processes": ["x"]})
+        self.config_path.write_bytes(b'{"comment": "caf\xe9"}')
+        minder = self.make_minder()
+        self.assertEqual(minder.config["blocked_processes"], ["x"])
+
+    def test_invalid_encoding_without_fallback_exits(self):
+        self.config_path.write_bytes(b'\xff')
+        with self.assertRaises(SystemExit):
+            self.make_minder()
+
+    def test_invalid_encoding_on_reload_keeps_running_config(self):
+        minder = self.make_minder({"blocked_processes": ["x"]})
+        self.config_path.write_bytes(b'\xff')
+        minder.reload_config()
+        self.assertEqual(minder.config["blocked_processes"], ["x"])
+
     def test_unparseable_config_without_fallback_exits(self):
         self.config_path.write_text("{not json")
         with self.assertRaises(SystemExit):
@@ -167,6 +184,11 @@ class AccessHoursTest(MinderTestCase):
 
 
 class UsageStateTest(MinderTestCase):
+    def test_invalid_encoding_in_state_starts_with_empty_usage(self):
+        self.state_path.write_bytes(b'\xff')
+        minder = self.make_minder()
+        self.assertTrue(minder.usage.is_empty())
+
     def test_state_round_trips_through_file(self):
         minder = self.make_minder()
         minder.usage.charge_process("kid", "steam*", 30)
@@ -616,6 +638,14 @@ class UserControlTest(MinderTestCase):
         self.write_user_control({"disabled_users": {"kid": {"reason": "grounded"}}})
         minder = self.make_minder({"user_control": {"enabled": True}})
         self.user_control_path.write_text("{not json")
+        minder.end_user_session = mock.Mock()
+        minder.enforce_user_control()
+        minder.end_user_session.assert_called_once()
+
+    def test_invalid_encoding_keeps_the_last_good_user_control(self):
+        self.write_user_control({"disabled_users": {"kid": {"reason": "grounded"}}})
+        minder = self.make_minder({"user_control": {"enabled": True}})
+        self.user_control_path.write_bytes(b'\xff')
         minder.end_user_session = mock.Mock()
         minder.enforce_user_control()
         minder.end_user_session.assert_called_once()

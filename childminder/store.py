@@ -58,13 +58,13 @@ def atomic_write_json(path: Path, data: dict):
 def read_json(path: Path) -> Optional[dict]:
     """Return the JSON object in path, None if it does not exist, or raise StoreError"""
     try:
-        with open(path, 'r') as f:
+        with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
     except FileNotFoundError:
         return None
     except PermissionError:
         raise StoreError(f"Permission denied reading {path}")
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise StoreError(f"Invalid JSON in {path}: {e}")
     except OSError as e:
         raise StoreError(f"Could not read {path}: {e}")

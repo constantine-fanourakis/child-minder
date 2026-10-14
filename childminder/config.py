@@ -92,13 +92,13 @@ def is_minutes(value) -> bool:
 def read_file(path: Path) -> dict:
     """Read a config file as a JSON object, raising ConfigError if that is impossible"""
     try:
-        with open(path, 'r') as f:
+        with open(path, 'r', encoding='utf-8') as f:
             config = json.load(f)
     except FileNotFoundError:
         raise ConfigError(f"Config file not found at {path}")
     except PermissionError:
         raise ConfigError(f"Permission denied reading {path}")
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
         raise ConfigError(f"Invalid JSON in {path}: {e}")
     except OSError as e:
         raise ConfigError(f"Could not read {path}: {e}")

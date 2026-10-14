@@ -112,6 +112,14 @@ class ValidateTest(unittest.TestCase):
 
 
 class ReadFileTest(unittest.TestCase):
+    def test_invalid_encoding_is_a_config_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, 'wb') as f:
+                f.write(b'{"comment": "caf\xe9"}')
+            with self.assertRaises(cfg.ConfigError):
+                cfg.read_file(path)
+
     def test_non_object_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "config.json")

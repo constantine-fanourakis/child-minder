@@ -194,6 +194,11 @@ class LoginTest(WebTestCase):
         self.web_config_path.write_text("{broken")
         self.assertEqual(self.request("GET", "/api/overview")[0], 401)
 
+    def test_invalid_encoding_in_web_config_refuses_sessions(self):
+        self.login()
+        self.web_config_path.write_bytes(b'\xff')
+        self.assertEqual(self.request("GET", "/api/overview")[0], 401)
+
 
 class NoPasswordTest(WebTestCase):
     password = None
