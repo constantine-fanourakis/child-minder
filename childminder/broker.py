@@ -409,6 +409,15 @@ class Broker:
                                        "Another change is still being applied; try again")
                 time.sleep(0.2)
 
+    def check_monitored_users(self, users: list):
+        """Refuse account locks for users the current config does not monitor"""
+        if users:
+            config = self.effective_config([])
+            for user in users:
+                if not cfg.monitors(config, user):
+                    raise RequestError(HTTPStatus.FORBIDDEN,
+                                       f"{user} is not a monitored user")
+
     def run_commands(self, request: dict) -> dict:
         """Run cmctl commands in order, stopping at the first that fails"""
         commands = request.get("commands")
@@ -421,20 +430,19 @@ class Broker:
 
         account_users = [c["args"][0] for c in commands
                          if c["command"] in MONITORED_USER_COMMANDS]
-        if account_users:
-            config = self.effective_config([])
-            for user in account_users:
-                if not cfg.monitors(config, user):
-                    raise RequestError(HTTPStatus.FORBIDDEN,
-                                       f"{user} is not a monitored user")
 
         output = []
-        # Broker processes run side by side, and cmctl rewrites config.json
-        # without a lock, so commands from different requests take turns
+        # Keep whole batches from different requests from interleaving.
+        # cmctl also locks individual config edits against direct CLI calls.
         fd = os.open(self.command_lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
             self.wait_for_lock(fd)
-            for argv in argvs:
+            # Validate after waiting, before making any change, then again
+            # before each account lock: earlier commands can remove users.
+            self.check_monitored_users(account_users)
+            for command, argv in zip(commands, argvs):
+                if command["command"] in MONITORED_USER_COMMANDS:
+                    self.check_monitored_users([command["args"][0]])
                 logger.info(f"Web UI client {client} ran: cmctl {' '.join(argv[2:])}")
                 try:
                     result = subprocess.run(argv, capture_output=True, text=True,

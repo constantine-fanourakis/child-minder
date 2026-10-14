@@ -569,6 +569,32 @@ class CommandTest(WebTestCase):
             self.write(self.config_path, {"monitored_users": users})
             self.assertEqual(self.post({"command": "disable-user", "args": ["kid"]})[0], 403)
 
+    def test_locking_checks_monitoring_after_waiting_for_the_command_lock(self):
+        wait_for_lock = self.broker.wait_for_lock
+
+        def remove_user_while_waiting(fd):
+            self.write(self.config_path, {"monitored_users": []})
+            wait_for_lock(fd)
+
+        with mock.patch.object(self.broker, "wait_for_lock", remove_user_while_waiting):
+            status, _, body = self.post({"command": "disable-user", "args": ["kid"]})
+        self.assertEqual(status, 403)
+        self.assertIn("not a monitored user", body["error"])
+        self.assertEqual(self.ran(), [])
+
+    def test_batch_cannot_lock_a_user_it_just_removed(self):
+        def fake_run(argv, **kwargs):
+            if argv[2] == "remove-user":
+                self.write(self.config_path, {"monitored_users": []})
+            return self.fake_run(argv, **kwargs)
+
+        self.run_mock.side_effect = fake_run
+        status, _, body = self.post({"command": "remove-user", "args": ["kid"]},
+                                    {"command": "disable-user", "args": ["kid"]})
+        self.assertEqual(status, 403)
+        self.assertIn("not a monitored user", body["error"])
+        self.assertEqual(self.ran(), [["remove-user", "--", "kid"]])
+
     def test_any_user_can_be_unlocked(self):
         self.write(self.config_path, {"monitored_users": []})
         self.assertEqual(self.post({"command": "enable-user", "args": ["parent"]})[0], 200)
