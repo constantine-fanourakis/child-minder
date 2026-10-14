@@ -1,7 +1,7 @@
 """On-disk state shared by the daemon and cmctl.
 
 File ownership:
-- config.json: written by cmctl, read by the daemon
+- config.json: written by cmctl under its config.json.lock, read by the daemon
 - state.json: written by the daemon; cmctl rewrites it only while the
   service is stopped
 - user_control.json: written by both, always inside UserControlStore.update(),
@@ -73,6 +73,17 @@ def read_json(path: Path) -> Optional[dict]:
     return data
 
 
+@contextmanager
+def file_lock(path: Path) -> Iterator[None]:
+    """Hold an exclusive lock on a stable sidecar file, not the replaced JSON file"""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 def normalize_user_control(raw: dict, warn: Optional[Warn] = None) -> dict:
     """Return user control data with both sections present and every schedule current.
 
@@ -140,12 +151,8 @@ class UserControlStore:
 
     @contextmanager
     def locked(self) -> Iterator[None]:
-        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+        with file_lock(self.lock_path):
             yield
-        finally:
-            os.close(fd)
 
     def save(self, data: dict):
         """Write the file; the caller holds the lock"""

@@ -8,6 +8,7 @@ import argparse
 import getpass
 import grp
 from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Optional
@@ -58,6 +59,23 @@ def service_is_active() -> bool:
     """Check whether the child-minder service is currently running"""
     result = subprocess.run(['systemctl', 'is-active', '--quiet', SERVICE], check=False)
     return result.returncode == 0
+
+
+def _config_edit(method):
+    """Lock the entire read-modify-write, for CLI and broker callers alike.
+
+    If an operation also edits user control, that lock comes first: decorate
+    _enable_user_control, not the outer account or schedule method.
+    """
+    @wraps(method)
+    def edit(self, *args, **kwargs):
+        lock_path = self.config_path.with_name(self.config_path.name + ".lock")
+        try:
+            with store.file_lock(lock_path):
+                return method(self, *args, **kwargs)
+        except OSError as e:
+            _exit_unreadable(e)
+    return edit
 
 
 class ChildMinderManager:
@@ -149,6 +167,7 @@ class ChildMinderManager:
             state = None
         return state or {"last_reset": datetime.now().isoformat()}
         
+    @_config_edit
     def add_blocked_process(self, process_name: str):
         """Add a process to the block list"""
         config = self.load_config()
@@ -161,6 +180,7 @@ class ChildMinderManager:
             print(f"'{process_name}' is already blocked")
         return True
 
+    @_config_edit
     def remove_blocked_process(self, process_name: str):
         """Remove a process from the block list"""
         config = self.load_config()
@@ -173,6 +193,7 @@ class ChildMinderManager:
         print(f"'{process_name}' is not in blocked processes")
         return False
 
+    @_config_edit
     def add_to_group(self, group_name: str, process_name: str):
         """Add a process to a group"""
         config = self.load_config()
@@ -190,6 +211,7 @@ class ChildMinderManager:
             print(f"'{process_name}' is already in group '{group_name}'")
         return True
 
+    @_config_edit
     def remove_from_group(self, group_name: str, process_name: str):
         """Remove a process from a group"""
         config = self.load_config()
@@ -208,6 +230,7 @@ class ChildMinderManager:
             print(f"Group '{group_name}' does not exist")
         return False
 
+    @_config_edit
     def set_group_limit(self, group_name: str, minutes: int):
         """Set time limit for a group"""
         if not self._check_minutes(minutes):
@@ -218,6 +241,7 @@ class ChildMinderManager:
         print(f"Set time limit for group '{group_name}' to {minutes} minutes")
         return True
 
+    @_config_edit
     def remove_group_limit(self, group_name: str):
         """Remove time limit for a group"""
         config = self.load_config()
@@ -251,6 +275,7 @@ class ChildMinderManager:
                            " starting it empty")
         return {}
 
+    @_config_edit
     def set_user_daily_limit(self, username: str, minutes: int, day_type: str = 'both'):
         """Set overall daily screen time limit for a user (weekday, weekend, or both)"""
         if not self._check_minutes(minutes):
@@ -270,6 +295,7 @@ class ChildMinderManager:
             print(f"Set {day_type} daily screen time limit for '{username}' to {minutes} minutes")
         return True
 
+    @_config_edit
     def remove_user_day_limit(self, username: str, day: str):
         """Remove a user's daily screen time limit for one day type, in one save"""
         config = self.load_config()
@@ -287,6 +313,7 @@ class ChildMinderManager:
         print(f"Removed {day} daily screen time limit for '{username}'")
         return True
 
+    @_config_edit
     def remove_user_daily_limit(self, username: str):
         """Remove overall daily screen time limit for a user"""
         config = self.load_config()
@@ -318,6 +345,7 @@ class ChildMinderManager:
                     print(f"  - {proc}")
         return True
     
+    @_config_edit
     def set_time_limit(self, process_name: str, minutes: int):
         """Set time limit for a process"""
         if not self._check_minutes(minutes):
@@ -328,6 +356,7 @@ class ChildMinderManager:
         print(f"Set time limit for '{process_name}' to {minutes} minutes")
         return True
 
+    @_config_edit
     def remove_time_limit(self, process_name: str):
         """Remove time limit for a process"""
         config = self.load_config()
@@ -340,6 +369,7 @@ class ChildMinderManager:
         print(f"'{process_name}' has no time limit set")
         return False
 
+    @_config_edit
     def add_monitored_user(self, username: str):
         """Add a user to monitor"""
         config = self.load_config()
@@ -352,6 +382,7 @@ class ChildMinderManager:
             print(f"'{username}' is already monitored")
         return True
 
+    @_config_edit
     def remove_monitored_user(self, username: str):
         """Remove a user from monitoring"""
         config = self.load_config()
@@ -500,6 +531,7 @@ class ChildMinderManager:
         print(result.stdout)
         return True
         
+    @_config_edit
     def enable_monitoring(self, enable: bool = True):
         """Enable or disable monitoring"""
         config = self.load_config()
@@ -652,6 +684,7 @@ class ChildMinderManager:
         self.user_control.save(user_control)
         self._enable_user_control()
 
+    @_config_edit
     def _enable_user_control(self):
         """Turn on user control in the config, which the daemon needs to act on the file"""
         config = self.load_config()

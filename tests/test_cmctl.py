@@ -4,7 +4,9 @@ import fcntl
 import io
 import json
 import os
+import threading
 import unittest
+from contextlib import contextmanager
 from unittest import mock
 
 from childminder import webauth
@@ -22,6 +24,7 @@ class PrivilegeTest(CmctlTestCase):
         self.euid = 1000
         out = self.run_cmctl("config")
         self.assertIn("Current Configuration", out)
+        self.assertFalse(self.config_path.with_name("config.json.lock").exists())
 
 
 class UnreadableDataTest(CmctlTestCase):
@@ -253,6 +256,126 @@ class ConfigCommandTest(CmctlTestCase):
         self.assertFalse(self.read_json(self.config_path)["enabled"])
         self.run_cmctl("enable")
         self.assertTrue(self.read_json(self.config_path)["enabled"])
+
+
+class ConfigLockTest(CmctlTestCase):
+    def assert_config_locked(self):
+        path = self.config_path.with_name("config.json.lock")
+        fd = os.open(path, os.O_RDWR)
+        try:
+            with self.assertRaises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+
+    def test_every_config_edit_holds_the_lock_while_reading_and_saving(self):
+        read_file = cmctl.cfg.read_file
+        write_file = cmctl.atomic_write_json
+
+        def read(path):
+            self.assert_config_locked()
+            return read_file(path)
+
+        def write(path, data):
+            self.assert_config_locked()
+            return write_file(path, data)
+
+        commands = (("block", "steam"), ("unblock", "steam"),
+                    ("limit", "firefox", "60"), ("unlimit", "firefox"),
+                    ("add-to-group", "games", "steam"),
+                    ("group-limit", "games", "90"), ("group-unlimit", "games"),
+                    ("remove-from-group", "games", "steam"),
+                    ("user-limit", "kid", "90"), ("user-weekday-unlimit", "kid"),
+                    ("user-weekend-unlimit", "kid"),
+                    ("user-limit", "kid", "90"), ("user-unlimit", "kid"),
+                    ("add-user", "kid"), ("remove-user", "kid"),
+                    ("disable",), ("enable",),
+                    ("set-weekday-hours", "kid", "15", "20"))
+        with mock.patch.object(cmctl.cfg, 'read_file', side_effect=read), \
+                mock.patch.object(cmctl, 'atomic_write_json', side_effect=write):
+            for command in commands:
+                with self.subTest(command=command):
+                    self.run_cmctl(*command)
+                    self.assertEqual(self.exit_status, 0)
+
+    def test_concurrent_edits_keep_both_changes(self):
+        first = cmctl.ChildMinderManager()
+        second = cmctl.ChildMinderManager()
+        first_load, second_load = first.load_config, second.load_config
+        real_lock = cmctl.store.file_lock
+        has_read = threading.Event()
+        release = threading.Event()
+        attempting = threading.Event()
+        second_has_read = threading.Event()
+        errors = []
+
+        def read_first():
+            data = first_load()
+            has_read.set()
+            if not release.wait(5):
+                raise RuntimeError("test did not release the first editor")
+            return data
+
+        def read_second():
+            second_has_read.set()
+            return second_load()
+
+        @contextmanager
+        def observed_lock(path):
+            if threading.current_thread() is second_thread:
+                attempting.set()
+            with real_lock(path):
+                yield
+
+        def invoke(method, *args):
+            try:
+                method(*args)
+            except BaseException as e:
+                errors.append(e)
+
+        first_thread = threading.Thread(target=invoke,
+                                        args=(first.add_blocked_process, "steam"), daemon=True)
+        second_thread = threading.Thread(target=invoke,
+                                         args=(second.set_time_limit, "firefox", 60), daemon=True)
+        with mock.patch.object(first, 'load_config', side_effect=read_first), \
+                mock.patch.object(second, 'load_config', side_effect=read_second), \
+                mock.patch.object(cmctl.store, 'file_lock', observed_lock), \
+                mock.patch('builtins.print'):
+            try:
+                first_thread.start()
+                self.assertTrue(has_read.wait(5))
+                second_thread.start()
+                self.assertTrue(attempting.wait(5))
+                self.assertFalse(second_has_read.is_set())
+            finally:
+                release.set()
+                first_thread.join(5)
+                if second_thread.ident is not None:
+                    second_thread.join(5)
+        self.assertFalse(first_thread.is_alive() or second_thread.is_alive())
+        self.assertEqual(errors, [])
+        data = self.read_json(self.config_path)
+        self.assertEqual(data["blocked_processes"], ["steam"])
+        self.assertEqual(data["limited_processes"], {"firefox": 60})
+
+    def test_failed_save_releases_the_config_lock(self):
+        with mock.patch.object(cmctl, 'atomic_write_json', side_effect=OSError("disk full")):
+            out = self.run_cmctl("block", "steam")
+        self.assertEqual(self.exit_status, 1)
+        self.assertIn("disk full", out)
+        fd = os.open(self.config_path.with_name("config.json.lock"), os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+
+    def test_locked_edit_preserves_unrelated_unvalidated_entries(self):
+        raw = {"min_uid": 0, "group_limits": {"broken": "typo"},
+               "user_daily_limits": {"kid": 90}}
+        self.write_config(raw)
+        self.run_cmctl("block", "steam")
+        self.assertEqual(self.read_json(self.config_path),
+                         dict(raw, blocked_processes=["steam"]))
 
 
 class ResetTest(CmctlTestCase):

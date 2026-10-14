@@ -55,6 +55,26 @@ class ReadJsonTest(StoreTestCase):
                 store.read_json(path)
 
 
+class FileLockTest(StoreTestCase):
+    def test_lock_is_private_exclusive_and_released_after_an_error(self):
+        path = self.tmp / "config.json.lock"
+        with self.assertRaises(RuntimeError):
+            with store.file_lock(path):
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                fd = os.open(path, os.O_RDWR)
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(fd)
+                raise RuntimeError
+        fd = os.open(path, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+
+
 class NormalizeUserControlTest(unittest.TestCase):
     def test_sections_are_filled_in(self):
         self.assertEqual(store.normalize_user_control({}),
